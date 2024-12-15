@@ -122,7 +122,9 @@ def test_model_timestamps(app, db_cluster):
         assert db_cluster.updated_at is not None
 
         # Update cluster
+        import time
         original_updated_at = db_cluster.updated_at
+        time.sleep(0.1)  # Add small delay to ensure different timestamp
         db_cluster.service_account = "new-sa"
         db.session.commit()
 

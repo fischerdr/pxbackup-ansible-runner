@@ -16,6 +16,7 @@ class AuditLog(db.Model):
     action = db.Column(db.String(255), nullable=False)
     details = db.Column(db.Text)
     status = db.Column(db.String(50))
+    cluster_id = db.Column(db.Integer, db.ForeignKey("cluster.id"), nullable=True)
 
 
 class Cluster(db.Model):
@@ -35,6 +36,12 @@ class Cluster(db.Model):
         default=get_utc_now,
         onupdate=get_utc_now,
     )
+
+    # Relationships
+    playbook_executions = db.relationship('PlaybookExecution', backref='cluster', lazy=True,
+                                        cascade='all, delete-orphan')
+    audit_logs = db.relationship('AuditLog', backref='cluster', lazy=True,
+                               cascade='all, delete-orphan')
 
 
 class PlaybookExecution(db.Model):

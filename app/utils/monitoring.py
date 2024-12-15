@@ -1,4 +1,4 @@
-"""Monitoring and metrics utilities."""
+"""Monitoring utilities."""
 
 from functools import wraps
 from flask import request
@@ -6,6 +6,7 @@ from prometheus_client import Counter, Histogram
 import time
 from typing import Callable
 from datetime import datetime, timezone
+from contextlib import contextmanager
 
 # Metrics
 http_requests_total = Counter(
@@ -16,15 +17,39 @@ http_request_duration_seconds = Histogram(
     "http_request_duration_seconds", "HTTP request latency", ["method", "endpoint"]
 )
 
-playbook_execution_duration_seconds = Histogram(
+REQUEST_DURATION = Histogram(
+    "request_duration_seconds",
+    "HTTP request duration in seconds",
+    ["method", "endpoint", "status"],
+)
+
+REQUEST_COUNT = Counter(
+    "request_count_total",
+    "Total number of HTTP requests",
+    ["method", "endpoint", "status"],
+)
+
+PLAYBOOK_EXECUTION_DURATION = Histogram(
     "playbook_execution_duration_seconds",
-    "Ansible playbook execution duration",
+    "Playbook execution duration in seconds",
     ["playbook_name", "status"],
 )
 
-vault_operation_duration_seconds = Histogram(
+PLAYBOOK_EXECUTION_COUNT = Counter(
+    "playbook_execution_count_total",
+    "Total number of playbook executions",
+    ["playbook_name", "status"],
+)
+
+VAULT_OPERATION_DURATION = Histogram(
     "vault_operation_duration_seconds",
-    "Vault operation duration",
+    "Vault operation duration in seconds",
+    ["operation", "status"],
+)
+
+VAULT_OPERATION_COUNT = Counter(
+    "vault_operation_count_total",
+    "Total number of Vault operations",
     ["operation", "status"],
 )
 
@@ -54,42 +79,37 @@ def track_request_metrics() -> Callable:
                 http_request_duration_seconds.labels(
                     method=method, endpoint=endpoint
                 ).observe(duration)
-
-        return decorated_function
-
-    return decorator
-
-
-def track_playbook_execution(playbook_name: str) -> None:
-    """Track playbook execution metrics."""
-
-    def decorator(f: Callable) -> Callable:
-        @wraps(f)
-        async def decorated_function(*args, **kwargs):
-            start_time = time.time()
-            try:
-                result = await f(*args, **kwargs)
-                status = "success"
-                return result
-            except Exception:
-                status = "failure"
-                raise
-            finally:
-                duration = time.time() - start_time
-                playbook_execution_duration_seconds.labels(
-                    playbook_name=playbook_name, status=status
+                REQUEST_DURATION.labels(
+                    method=method, endpoint=endpoint, status=status
                 ).observe(duration)
+                REQUEST_COUNT.labels(
+                    method=method, endpoint=endpoint, status=status
+                ).inc()
 
         return decorated_function
 
     return decorator
 
 
-async def record_vault_operation(
-    operation: str, start_time: float, success: bool
-) -> None:
+@contextmanager
+def track_playbook_execution(playbook_name):
+    """Track playbook execution metrics."""
+    start_time = time.time()
+    try:
+        yield
+        duration = time.time() - start_time
+        PLAYBOOK_EXECUTION_DURATION.labels(playbook_name=playbook_name, status="success").observe(duration)
+        PLAYBOOK_EXECUTION_COUNT.labels(playbook_name=playbook_name, status="success").inc()
+    except Exception as e:
+        duration = time.time() - start_time
+        PLAYBOOK_EXECUTION_DURATION.labels(playbook_name=playbook_name, status="failure").observe(duration)
+        PLAYBOOK_EXECUTION_COUNT.labels(playbook_name=playbook_name, status="failure").inc()
+        raise e
+
+
+def record_vault_operation(operation, start_time, success):
     """Record Vault operation metrics."""
     duration = time.time() - start_time
-    vault_operation_duration_seconds.labels(
-        operation=operation, status="success" if success else "failure"
-    ).observe(duration)
+    status = "success" if success else "failure"
+    VAULT_OPERATION_DURATION.labels(operation=operation, status=status).observe(duration)
+    VAULT_OPERATION_COUNT.labels(operation=operation, status=status).inc()

@@ -133,6 +133,6 @@ def mock_gitea(mocker):
 @pytest.fixture
 def mock_ansible(mocker):
     """Mock Ansible runner."""
-    mock = mocker.patch("ansible.playbook.PlayBook")
-    mock.return_value.run.return_value = {"status": "success"}
+    mock = mocker.patch("ansible_runner.Runner")
+    mock.return_value.run.return_value = {"rc": 0, "stdout": "success"}
     return mock

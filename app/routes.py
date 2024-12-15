@@ -402,19 +402,111 @@ async def check_status():
         raise
 
 
-@bp.route("/health")
+@bp.route("/api/v1/health", methods=["GET"])
+@bp.route("/health", methods=["GET"])
+@cache.cached(timeout=30)  # Cache health check for 30 seconds
 async def health_check():
-    """Check health of all services."""
-    health = {
+    """Health check endpoint that checks all services."""
+    health_status = {
         "status": "healthy",
         "timestamp": datetime.now(timezone.utc).isoformat(),
-        "checks": {
-            "database": await check_database_health(),
-            "vault": await check_vault_health(),
-            "kubernetes": await check_kubernetes_health(),
-        },
+        "services": {
+            "database": {"status": "unknown"},
+            "vault": {"status": "unknown"},
+            "redis": {"status": "unknown"},
+            "keycloak": {"status": "unknown"}
+        }
     }
 
-    health["status"] = "healthy" if all(health["checks"].values()) else "unhealthy"
+    try:
+        # Check database connection
+        start_time = time.time()
+        db.session.execute("SELECT 1")
+        health_status["services"]["database"] = {
+            "status": "healthy",
+            "latency_ms": round((time.time() - start_time) * 1000, 2)
+        }
+    except Exception as e:
+        health_status["services"]["database"] = {
+            "status": "unhealthy",
+            "error": str(e)
+        }
+        health_status["status"] = "unhealthy"
 
-    return jsonify(health), 200 if health["status"] == "healthy" else 503
+    try:
+        # Check Vault connection with timeout
+        start_time = time.time()
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                f"{vault_client.url}/v1/sys/health",
+                timeout=aiohttp.ClientTimeout(total=5)
+            ) as response:
+                if response.status == 200:
+                    health_status["services"]["vault"] = {
+                        "status": "healthy",
+                        "latency_ms": round((time.time() - start_time) * 1000, 2)
+                    }
+                else:
+                    raise Exception(f"Vault returned status {response.status}")
+    except Exception as e:
+        health_status["services"]["vault"] = {
+            "status": "unhealthy",
+            "error": str(e)
+        }
+        health_status["status"] = "unhealthy"
+
+    try:
+        # Check Redis connection with timeout
+        start_time = time.time()
+        await asyncio.wait_for(cache.ping(), timeout=5.0)
+        health_status["services"]["redis"] = {
+            "status": "healthy",
+            "latency_ms": round((time.time() - start_time) * 1000, 2)
+        }
+    except Exception as e:
+        health_status["services"]["redis"] = {
+            "status": "unhealthy",
+            "error": str(e)
+        }
+        health_status["status"] = "unhealthy"
+
+    try:
+        # Check Keycloak connection with timeout
+        start_time = time.time()
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                f"{config.KEYCLOAK_URL}/health",
+                timeout=aiohttp.ClientTimeout(total=5)
+            ) as response:
+                if response.status == 200:
+                    health_status["services"]["keycloak"] = {
+                        "status": "healthy",
+                        "latency_ms": round((time.time() - start_time) * 1000, 2)
+                    }
+                else:
+                    raise Exception(f"Keycloak returned status {response.status}")
+    except Exception as e:
+        health_status["services"]["keycloak"] = {
+            "status": "unhealthy",
+            "error": str(e)
+        }
+        health_status["status"] = "unhealthy"
+
+    status_code = 200 if health_status["status"] == "healthy" else 503
+    return jsonify(health_status), status_code
+
+
+@bp.route("/api/v1/ready", methods=["GET"])
+@bp.route("/ready", methods=["GET"])
+async def readiness_check():
+    """Readiness probe that checks if the application is ready to serve traffic."""
+    try:
+        # Only check database connection for readiness
+        # This ensures the application can serve requests
+        db.session.execute("SELECT 1")
+        return jsonify({"status": "ready"}), 200
+    except Exception as e:
+        return jsonify({
+            "status": "not_ready",
+            "error": str(e)
+        }), 503

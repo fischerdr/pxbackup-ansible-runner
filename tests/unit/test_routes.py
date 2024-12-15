@@ -5,8 +5,20 @@ import pytest
 from app.models import Cluster, AuditLog, PlaybookExecution
 
 
-def test_health_check(client):
+def test_health_check(client, mock_vault, mocker):
     """Test health check endpoint."""
+    # Mock Redis ping
+    mocker.patch("flask_caching.Cache.ping", return_value=True)
+    
+    # Mock Keycloak health check
+    mock_response = mocker.AsyncMock()
+    mock_response.status = 200
+    mock_session = mocker.AsyncMock()
+    mock_session.__aenter__.return_value = mock_response
+    mock_client = mocker.AsyncMock()
+    mock_client.__aenter__.return_value = mock_session
+    mocker.patch("aiohttp.ClientSession", return_value=mock_client)
+    
     response = client.get("/api/v1/health")
     assert response.status_code == 200
     data = json.loads(response.data)
