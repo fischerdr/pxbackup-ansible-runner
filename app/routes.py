@@ -75,10 +75,8 @@ def verify_token(f):
                 issuer=current_app.config["OKTA_ISSUER"],
                 client_id=current_app.config["OKTA_CLIENT_ID"],
             )
-            await jwt_verifier.verify_access_token(token)
-
-            decoded_token = jwt.decode(token, options={"verify_signature": False})
-            g.user_id = decoded_token.get("sub")
+            claims = await jwt_verifier.verify_access_token(token)
+            g.user_id = claims.get("sub")
             if not g.user_id:
                 raise AuthenticationError("Token does not contain user ID")
 
