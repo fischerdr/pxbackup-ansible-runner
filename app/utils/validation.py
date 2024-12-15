@@ -1,16 +1,15 @@
 """Request validation schemas using Pydantic."""
 
-from pydantic import BaseModel, Field, validator, root_validator
 from typing import Dict, Any, Optional
+from pydantic import BaseModel, Field, model_validator, field_validator
 import re
+import base64
 
 
 class CreateClusterRequest(BaseModel):
     """Validation schema for cluster creation request."""
 
-    name: str = Field(
-        ..., min_length=3, max_length=63, pattern=r"^[a-z0-9][a-z0-9-]*[a-z0-9]$"
-    )
+    name: str = Field(..., min_length=1, max_length=255)
     kubeconfig: Optional[str] = Field(
         None,
         description="Base64 encoded kubeconfig. Either this or kubeconfig_vault_path must be provided",
@@ -19,59 +18,52 @@ class CreateClusterRequest(BaseModel):
         None,
         description="Path to kubeconfig in Vault. Either this or kubeconfig must be provided",
     )
-    service_account: str = Field(
-        ..., min_length=3, max_length=63, pattern=r"^[a-z0-9][a-z0-9-]*[a-z0-9]$"
-    )
-    namespace: str = Field(
-        ..., min_length=3, max_length=63, pattern=r"^[a-z0-9][a-z0-9-]*[a-z0-9]$"
-    )
+    service_account: str = Field(..., min_length=1, max_length=255)
+    namespace: str = Field(..., min_length=1, max_length=255)
     force: bool = Field(
         False, description="If true, recreate the cluster even if it already exists"
     )
 
-    @validator("name")
-    def validate_name(cls, v):
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, v: str) -> str:
         if "--" in v:
-            raise ValueError("Cluster name cannot contain consecutive hyphens")
-        if not re.match(r"^[a-z0-9][a-z0-9-]*[a-z0-9]$", v):
             raise ValueError(
-                "Cluster name must start and end with alphanumeric character and contain only lowercase letters, numbers, and hyphens"
+                "Name cannot contain double hyphens (--) as this can cause issues with shell commands"
             )
         return v
 
-    @validator("service_account")
-    def validate_service_account(cls, v):
+    @field_validator("service_account")
+    @classmethod
+    def validate_service_account(cls, v: str) -> str:
         if "--" in v:
-            raise ValueError("Service account name cannot contain consecutive hyphens")
-        if not re.match(r"^[a-z0-9][a-z0-9-]*[a-z0-9]$", v):
             raise ValueError(
-                "Service account must start and end with alphanumeric character and contain only lowercase letters, numbers, and hyphens"
+                "Service account name cannot contain double hyphens (--) as this can cause issues with shell commands"
             )
         return v
 
-    @validator("namespace")
-    def validate_namespace(cls, v):
+    @field_validator("namespace")
+    @classmethod
+    def validate_namespace(cls, v: str) -> str:
         if "--" in v:
-            raise ValueError("Namespace cannot contain consecutive hyphens")
-        if not re.match(r"^[a-z0-9][a-z0-9-]*[a-z0-9]$", v):
             raise ValueError(
-                "Namespace must start and end with alphanumeric character and contain only lowercase letters, numbers, and hyphens"
+                "Namespace cannot contain double hyphens (--) as this can cause issues with shell commands"
             )
         return v
 
-    @validator("kubeconfig")
-    def validate_kubeconfig(cls, v):
+    @field_validator("kubeconfig")
+    @classmethod
+    def validate_kubeconfig(cls, v: Optional[str]) -> Optional[str]:
         if v is not None:
             try:
-                import base64
-
                 base64.b64decode(v)
             except Exception:
                 raise ValueError("Kubeconfig must be a valid base64 encoded string")
         return v
 
-    @root_validator
-    def validate_kubeconfig_source(cls, values):
+    @model_validator(mode='before')
+    @classmethod
+    def validate_kubeconfig_source(cls, values: Dict[str, Any]) -> Dict[str, Any]:
         kubeconfig = values.get("kubeconfig")
         vault_path = values.get("kubeconfig_vault_path")
 
@@ -90,12 +82,27 @@ class CreateClusterRequest(BaseModel):
 class UpdateServiceAccountRequest(BaseModel):
     """Validation schema for service account update request."""
 
-    cluster_name: str = Field(
-        ..., min_length=3, max_length=63, pattern=r"^[a-z0-9][a-z0-9-]*[a-z0-9]$"
-    )
-    service_account: str = Field(
-        ..., min_length=3, max_length=63, pattern=r"^[a-z0-9][a-z0-9-]*[a-z0-9]$"
-    )
+    cluster_name: str = Field(..., min_length=1, max_length=255)
+    service_account: str = Field(..., min_length=1, max_length=255)
+    namespace: str = Field(..., min_length=1, max_length=255)
+
+    @field_validator("service_account")
+    @classmethod
+    def validate_service_account(cls, v: str) -> str:
+        if "--" in v:
+            raise ValueError(
+                "Service account name cannot contain double hyphens (--) as this can cause issues with shell commands"
+            )
+        return v
+
+    @field_validator("namespace")
+    @classmethod
+    def validate_namespace(cls, v: str) -> str:
+        if "--" in v:
+            raise ValueError(
+                "Namespace cannot contain double hyphens (--) as this can cause issues with shell commands"
+            )
+        return v
 
 
 class ClusterStatusResponse(BaseModel):

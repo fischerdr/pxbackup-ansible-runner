@@ -7,11 +7,19 @@ from app import create_app, db
 from app.models import Cluster, AuditLog, PlaybookExecution
 
 
+@pytest.fixture(autouse=True)
+def setup_test_env(monkeypatch):
+    monkeypatch.setenv("OKTA_ISSUER", "https://test-issuer.okta.com")
+    monkeypatch.setenv("OKTA_CLIENT_ID", "test-client-id")
+    monkeypatch.setenv("K8S_API_URL", "https://kubernetes.default.svc")
+    monkeypatch.setenv("FLASK_ENV", "testing")
+    monkeypatch.setenv("TESTING", "true")
+
+
 @pytest.fixture
 def app():
     """Create and configure a test Flask application."""
     # Set test config
-    os.environ["FLASK_ENV"] = "testing"
     os.environ["SQLALCHEMY_DATABASE_URI"] = "sqlite:///:memory:"
     os.environ["REDIS_URL"] = "redis://localhost:6379/1"
     os.environ["VAULT_ADDR"] = "http://localhost:8200"
@@ -66,18 +74,21 @@ def sample_cluster():
 
 
 @pytest.fixture
-def db_cluster(app, sample_cluster):
-    """Create a sample cluster in the database."""
+def db_cluster(app):
+    """Create a test cluster."""
     with app.app_context():
         cluster = Cluster(
-            name=sample_cluster["name"],
-            kubeconfig=sample_cluster["kubeconfig"],
-            service_account=sample_cluster["service_account"],
-            namespace=sample_cluster["namespace"],
+            name="test-cluster",
+            kubeconfig="test-kubeconfig",
+            service_account="test-sa",
+            namespace="test-ns",
+            status="active",
         )
         db.session.add(cluster)
         db.session.commit()
-        return cluster
+        yield cluster
+        db.session.delete(cluster)
+        db.session.commit()
 
 
 @pytest.fixture

@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pxbackup-ansible-runner"
+version = "0.1.0"
+description = "PX-Backup Ansible Runner"
+requires-python = ">=3.11"
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "--strict-markers"
+markers = [
+    "integration: marks tests as integration tests",
+]
