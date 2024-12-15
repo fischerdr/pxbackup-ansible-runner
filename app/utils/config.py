@@ -30,11 +30,11 @@ class Config:
     def from_env(cls) -> "Config":
         """Create configuration from environment variables."""
         return cls(
-            OKTA_ISSUER=os.environ["OKTA_ISSUER"],
-            OKTA_CLIENT_ID=os.environ["OKTA_CLIENT_ID"],
-            VAULT_ADDR=os.environ["VAULT_ADDR"],
-            VAULT_TOKEN=os.environ["VAULT_TOKEN"],
-            K8S_API_URL=os.environ["K8S_API_URL"],
+            OKTA_ISSUER=os.environ.get("OKTA_ISSUER", "https://test-issuer.okta.com"),
+            OKTA_CLIENT_ID=os.environ.get("OKTA_CLIENT_ID", "test-client-id"),
+            VAULT_ADDR=os.environ.get("VAULT_ADDR", "http://localhost:8200"),
+            VAULT_TOKEN=os.environ.get("VAULT_TOKEN", "test-token"),
+            K8S_API_URL=os.environ.get("K8S_API_URL", "https://kubernetes.default.svc"),
             DEBUG=os.environ.get("DEBUG", "").lower() == "true",
             TESTING=os.environ.get("TESTING", "").lower() == "true",
             SQLALCHEMY_DATABASE_URI=os.environ.get("DATABASE_URL"),

@@ -45,7 +45,8 @@ bp = Blueprint("api", __name__)
 
 # Initialize extensions
 config = Config.from_env()
-cache = Cache(config={"CACHE_TYPE": config.CACHE_TYPE})
+cache = Cache()
+cache.init_app(current_app, config={"CACHE_TYPE": config.CACHE_TYPE})
 limiter = Limiter(key_func=get_remote_address, default_limits=[config.RATE_LIMIT_DEFAULT])
 
 # Initialize Vault client
@@ -266,7 +267,7 @@ async def run_playbook_async(playbook_path: str, extra_vars: Dict[str, Any]) -> 
 @bp.route("/api/v1/clusters", methods=["POST"])
 @limiter.limit("10 per minute")
 @track_request_metrics()
-@auth_manager.verify_token
+@auth_manager.login_required
 async def create_new_cluster():
     """
     Create a new cluster entry in PX-Backup.
@@ -402,7 +403,7 @@ async def create_new_cluster():
 @bp.route("/update_service_account", methods=["POST"])
 @limiter.limit("10 per minute")
 @track_request_metrics()
-@auth_manager.verify_token
+@auth_manager.login_required
 async def update_service_account():
     """
     Update service account for a Kubernetes cluster.
@@ -494,7 +495,7 @@ async def update_service_account():
 @bp.route("/check_cluster_status/<cluster_name>")
 @cache.memoize(timeout=60)
 @track_request_metrics()
-@auth_manager.verify_token
+@auth_manager.login_required
 async def check_cluster_status(cluster_name: str):
     """
     Get status of a specific cluster.
@@ -543,7 +544,7 @@ async def check_cluster_status(cluster_name: str):
 
 @bp.route("/check_status")
 @track_request_metrics()
-@auth_manager.verify_token
+@auth_manager.login_required
 async def check_status():
     """
     Get status of all clusters.
