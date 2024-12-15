@@ -1,0 +1,121 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gitea-config
+data:
+  app.ini: |
+    APP_NAME = PX-Backup Playbooks
+    RUN_MODE = dev
+    
+    [repository]
+    ROOT = /data/gitea/repositories
+    
+    [repository.local]
+    LOCAL_COPY_PATH = /data/gitea/tmp/local-repo
+    
+    [repository.upload]
+    TEMP_PATH = /data/gitea/uploads
+    
+    [server]
+    SSH_DOMAIN       = localhost
+    DOMAIN          = localhost
+    HTTP_PORT       = 3000
+    ROOT_URL        = http://localhost:3000/
+    DISABLE_SSH     = true
+    
+    [database]
+    PATH = /data/gitea/gitea.db
+    DB_TYPE = sqlite3
+    
+    [security]
+    INSTALL_LOCK   = true
+    SECRET_KEY     = generated-dev-secret-key
+    INTERNAL_TOKEN = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9
+    
+    [service]
+    DISABLE_REGISTRATION = false
+    REQUIRE_SIGNIN_VIEW = false
+    
+    [oauth2]
+    ENABLE = true
+    
+    [admin]
+    DISABLE_REGULAR_ORG_CREATION = false
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gitea
+spec:
+  type: NodePort
+  ports:
+  - port: 3000
+    targetPort: 3000
+    nodePort: 30400
+    name: web
+  selector:
+    app: gitea
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: gitea-data
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gitea
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: gitea
+  template:
+    metadata:
+      labels:
+        app: gitea
+    spec:
+      containers:
+      - name: gitea
+        image: gitea/gitea:1.21
+        ports:
+        - containerPort: 3000
+          name: web
+        volumeMounts:
+        - name: data
+          mountPath: /data
+        - name: config
+          mountPath: /data/gitea/conf/app.ini
+          subPath: app.ini
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 3000
+          initialDelaySeconds: 200
+          timeoutSeconds: 5
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 3000
+          initialDelaySeconds: 5
+          timeoutSeconds: 3
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: gitea-data
+      - name: config
+        configMap:
+          name: gitea-config

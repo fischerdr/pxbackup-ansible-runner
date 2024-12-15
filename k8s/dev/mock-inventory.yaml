@@ -1,0 +1,87 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mock-inventory-config
+data:
+  config.json: |
+    {
+      "clusters": {
+        "test-cluster": {
+          "kubeconfig_vault_path": "kubernetes/clusters/test-cluster"
+        },
+        "dev-cluster": {
+          "kubeconfig_vault_path": "kubernetes/clusters/dev-cluster"
+        }
+      }
+    }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mock-inventory
+spec:
+  type: NodePort
+  ports:
+  - port: 8080
+    targetPort: 8080
+    nodePort: 30080
+  selector:
+    app: mock-inventory
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mock-inventory
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mock-inventory
+  template:
+    metadata:
+      labels:
+        app: mock-inventory
+    spec:
+      containers:
+      - name: mock-inventory
+        image: python:3.11-slim
+        ports:
+        - containerPort: 8080
+        volumeMounts:
+        - name: config
+          mountPath: /app/config
+        command: ["/bin/sh", "-c"]
+        args:
+        - |
+          pip install flask==3.0.0 && \
+          cat > /app/app.py << 'EOF'
+          from flask import Flask, jsonify
+          import json
+          import os
+          
+          app = Flask(__name__)
+          
+          with open('/app/config/config.json') as f:
+              config = json.load(f)
+          
+          @app.route('/clusters/<name>')
+          def get_cluster(name):
+              if name in config['clusters']:
+                  return jsonify(config['clusters'][name])
+              return jsonify({'error': 'Cluster not found'}), 404
+          
+          if __name__ == '__main__':
+              app.run(host='0.0.0.0', port=8080)
+          EOF
+          && python /app/app.py
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+      volumes:
+      - name: config
+        configMap:
+          name: mock-inventory-config

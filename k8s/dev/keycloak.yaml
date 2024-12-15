@@ -1,0 +1,107 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: keycloak-config
+data:
+  realm.json: |
+    {
+      "realm": "pxbackup",
+      "enabled": true,
+      "users": [
+        {
+          "username": "testuser",
+          "email": "test@example.com",
+          "enabled": true,
+          "credentials": [
+            {
+              "type": "password",
+              "value": "testpass",
+              "temporary": false
+            }
+          ],
+          "clientRoles": {
+            "pxbackup-client": [
+              "user"
+            ]
+          }
+        }
+      ],
+      "clients": [
+        {
+          "clientId": "pxbackup-client",
+          "enabled": true,
+          "publicClient": false,
+          "secret": "pxbackup-secret",
+          "redirectUris": [
+            "http://localhost:5000/*"
+          ],
+          "webOrigins": [
+            "http://localhost:5000"
+          ]
+        }
+      ]
+    }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: keycloak
+spec:
+  type: NodePort
+  ports:
+  - port: 8080
+    targetPort: 8080
+    nodePort: 30300
+  selector:
+    app: keycloak
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: keycloak
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: keycloak
+  template:
+    metadata:
+      labels:
+        app: keycloak
+    spec:
+      containers:
+      - name: keycloak
+        image: quay.io/keycloak/keycloak:23.0
+        args:
+        - start-dev
+        - --import-realm
+        env:
+        - name: KEYCLOAK_ADMIN
+          value: "admin"
+        - name: KEYCLOAK_ADMIN_PASSWORD
+          value: "admin"
+        - name: KC_PROXY
+          value: "edge"
+        ports:
+        - name: http
+          containerPort: 8080
+        volumeMounts:
+        - name: realm-config
+          mountPath: /opt/keycloak/data/import
+        readinessProbe:
+          httpGet:
+            path: /realms/master
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "500m"
+          limits:
+            memory: "1Gi"
+            cpu: "1000m"
+      volumes:
+      - name: realm-config
+        configMap:
+          name: keycloak-config

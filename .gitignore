@@ -2,8 +2,6 @@
 __pycache__/
 *.py[cod]
 *$py.class
-
-# C extensions
 *.so
 
 # Distribution / packaging
@@ -125,7 +123,6 @@ celerybeat.pid
 .env
 .venv
 env/
-venv/
 ENV/
 env.bak/
 venv.bak/
@@ -155,8 +152,101 @@ dmypy.json
 cython_debug/
 
 # PyCharm
-#  JetBrains specific template is maintained in a separate JetBrains.gitignore that can
-#  be found at https://github.com/github/gitignore/blob/main/Global/JetBrains.gitignore
-#  and can be added to the global gitignore or merged into this file.  For a more nuclear
-#  option (not recommended) you can uncomment the following to ignore the entire idea folder.
-#.idea/
+.idea/
+
+# Kubernetes
+kubeconfig
+.kube/
+*kubeconfig*
+
+# Helm
+charts/*/charts/
+charts/*/requirements.lock
+*.tgz
+.helm/
+
+# Docker
+.docker/
+docker-compose.override.yml
+docker-compose.override.yaml
+
+# IDE additional
+.vscode/
+*.swp
+*.swo
+*~
+
+# Local development additional
+*.local
+.env.local
+*.local.yaml
+*.local.yml
+local/
+
+# Ansible
+*.retry
+ansible/*.retry
+inventory.local
+vault.key
+vault.txt
+*.vault
+
+# Python
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+venv/
+env/
+ENV/
+.env
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Test
+.coverage
+coverage.xml
+htmlcov/
+.pytest_cache/
+.tox/
+nosetests.xml
+coverage/
+
+# Local Development
+instance/
+.flask_pf_pid
+*.db
+*.sqlite3
+
+# Kubernetes
+kubeconfig
+.kube/
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+*.tmp
+.DS_Store
+Thumbs.db
