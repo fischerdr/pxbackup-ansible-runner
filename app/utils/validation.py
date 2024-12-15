@@ -1,9 +1,10 @@
 """Request validation schemas using Pydantic."""
 
-from typing import Dict, Any, Optional
-from pydantic import BaseModel, Field, model_validator, field_validator
-import re
 import base64
+import re
+from typing import Any, Dict, Optional
+
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class CreateClusterRequest(BaseModel):
@@ -61,20 +62,16 @@ class CreateClusterRequest(BaseModel):
                 raise ValueError("Kubeconfig must be a valid base64 encoded string")
         return v
 
-    @model_validator(mode='before')
+    @model_validator(mode="before")
     @classmethod
     def validate_kubeconfig_source(cls, values: Dict[str, Any]) -> Dict[str, Any]:
         kubeconfig = values.get("kubeconfig")
         vault_path = values.get("kubeconfig_vault_path")
 
         if kubeconfig is None and vault_path is None:
-            raise ValueError(
-                "Either kubeconfig or kubeconfig_vault_path must be provided"
-            )
+            raise ValueError("Either kubeconfig or kubeconfig_vault_path must be provided")
         if kubeconfig is not None and vault_path is not None:
-            raise ValueError(
-                "Only one of kubeconfig or kubeconfig_vault_path should be provided"
-            )
+            raise ValueError("Only one of kubeconfig or kubeconfig_vault_path should be provided")
 
         return values
 

@@ -1,6 +1,7 @@
+import os
+
 from flask import Flask
 from flask_sqlalchemy import SQLAlchemy
-import os
 from prometheus_flask_exporter import PrometheusMetrics
 
 db = SQLAlchemy()

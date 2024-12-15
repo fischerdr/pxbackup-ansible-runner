@@ -1,13 +1,15 @@
 """Unit tests for monitoring utilities."""
 
 import time
+
 import pytest
-from app.utils.monitoring import (
-    track_request_metrics,
-    track_playbook_execution,
-    record_vault_operation,
-)
 from prometheus_client import REGISTRY
+
+from app.utils.monitoring import (
+    record_vault_operation,
+    track_playbook_execution,
+    track_request_metrics,
+)
 
 
 def test_request_metrics(app, client):

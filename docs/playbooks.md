@@ -65,12 +65,12 @@ annotations:
 - name: Create PX-Backup Cluster Integration
   hosts: localhost
   gather_facts: false
-  
+
   vars:
     cluster_name: "{{ cluster_name }}"
     namespace: "{{ namespace }}"
     service_account: "{{ service_account }}"
-    
+
   tasks:
     - name: Create Namespace
       kubernetes.core.k8s:
@@ -80,7 +80,7 @@ annotations:
           kind: Namespace
           metadata:
             name: "{{ namespace }}"
-            
+
     - name: Create Service Account
       kubernetes.core.k8s:
         state: present
@@ -90,7 +90,7 @@ annotations:
           metadata:
             name: "{{ service_account }}"
             namespace: "{{ namespace }}"
-            
+
     - name: Create RBAC Role
       kubernetes.core.k8s:
         state: present
@@ -103,7 +103,7 @@ annotations:
             - apiGroups: ["*"]
               resources: ["*"]
               verbs: ["get", "list", "watch"]
-              
+
     - name: Create Role Binding
       kubernetes.core.k8s:
         state: present

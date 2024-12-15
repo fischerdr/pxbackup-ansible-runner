@@ -1,15 +1,16 @@
 """Initialize Ansible playbooks and requirements."""
 
-import os
-import git
-import logging
-import subprocess
-import yaml
 import json
+import logging
+import os
+import subprocess
 from pathlib import Path
-from typing import List, Dict, Optional, Any
-from tenacity import retry, stop_after_attempt, wait_exponential
+from typing import Any, Dict, List, Optional
+
 import ansible_runner
+import git
+import yaml
+from tenacity import retry, stop_after_attempt, wait_exponential
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -59,9 +60,7 @@ class AnsibleInitializer:
         self.playbooks_dir = os.environ.get("PLAYBOOKS_DIR", "/app/playbooks")
         self.gitea_url = os.environ.get("GITEA_URL", "http://gitea:3000")
         self.gitea_token = os.environ.get("GITEA_TOKEN")
-        self.repo_name = os.environ.get(
-            "GITEA_PLAYBOOKS_REPO", "user/pxbackup-playbooks"
-        )
+        self.repo_name = os.environ.get("GITEA_PLAYBOOKS_REPO", "user/pxbackup-playbooks")
 
         # Create necessary directories
         self.collections_path = os.path.join(self.playbooks_dir, "collections")
@@ -86,9 +85,7 @@ class AnsibleInitializer:
                 logger.info("Loaded playbook configuration from environment")
                 return playbooks
             except json.JSONDecodeError as e:
-                logger.warning(
-                    f"Failed to parse ANSIBLE_PLAYBOOKS environment variable: {e}"
-                )
+                logger.warning(f"Failed to parse ANSIBLE_PLAYBOOKS environment variable: {e}")
 
         # Try loading from config file
         config_path = os.path.join(self.playbooks_dir, "playbooks.yml")
@@ -120,9 +117,7 @@ class AnsibleInitializer:
             return base_url
         return base_url
 
-    @retry(
-        stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10)
-    )
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
     def clone_or_pull_repo(self) -> None:
         """Clone or pull the playbooks repository."""
         try:
@@ -165,10 +160,7 @@ class AnsibleInitializer:
                                 "name": config["description"],
                                 "hosts": "localhost",
                                 "gather_facts": False,
-                                "vars": {
-                                    var: "{{ " + var + " }}"
-                                    for var in config["variables"]
-                                },
+                                "vars": {var: "{{ " + var + " }}" for var in config["variables"]},
                                 "tasks": [
                                     {
                                         "name": "Placeholder task",
@@ -183,9 +175,7 @@ class AnsibleInitializer:
                     )
 
             # Create requirements files
-            collections_path = os.path.join(
-                self.playbooks_dir, "collections/requirements.yml"
-            )
+            collections_path = os.path.join(self.playbooks_dir, "collections/requirements.yml")
             roles_path = os.path.join(self.playbooks_dir, "roles/requirements.yml")
 
             Path(collections_path).parent.mkdir(parents=True, exist_ok=True)
@@ -235,9 +225,7 @@ class AnsibleInitializer:
         requirements = {"collections": [], "roles": []}
 
         # Read collections requirements
-        collections_req = os.path.join(
-            self.playbooks_dir, "collections/requirements.yml"
-        )
+        collections_req = os.path.join(self.playbooks_dir, "collections/requirements.yml")
         if os.path.exists(collections_req):
             with open(collections_req) as f:
                 try:
@@ -284,9 +272,7 @@ class AnsibleInitializer:
                         collection_name = collection.get("name")
                         collection_version = collection.get("version", "*")
                         if collection_name:
-                            collection_args.append(
-                                f"{collection_name}:{collection_version}"
-                            )
+                            collection_args.append(f"{collection_name}:{collection_version}")
                     else:
                         collection_args.append(collection)
 
@@ -342,15 +328,11 @@ class AnsibleInitializer:
                 runner.run()
                 logger.info(f"Validated playbook: {playbook.filename}")
             except Exception as e:
-                logger.error(
-                    f"Failed to validate playbook {playbook.filename}: {str(e)}"
-                )
+                logger.error(f"Failed to validate playbook {playbook.filename}: {str(e)}")
                 raise
 
         if missing_required:
-            raise FileNotFoundError(
-                f"Required playbooks not found: {', '.join(missing_required)}"
-            )
+            raise FileNotFoundError(f"Required playbooks not found: {', '.join(missing_required)}")
 
     def save_playbook_config(self) -> None:
         """Save current playbook configuration to file."""

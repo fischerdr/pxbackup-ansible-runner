@@ -1,67 +1,186 @@
 """API routes and handlers."""
 
-from flask import Blueprint, request, jsonify, current_app, g
-from .models import db, AuditLog, Cluster, PlaybookExecution
-from functools import wraps
-from okta_jwt_verifier import JWTVerifier
-import hvac
-import os
-import ansible.playbook
-import ansible.inventory
-from datetime import datetime, timezone
-import subprocess
-import requests
-from requests.exceptions import RequestException
-import shlex
-import jwt
-from typing import Tuple, Optional, Dict, Any, Union
 import asyncio
+import os
+import shlex
+import subprocess
+import time
+from datetime import datetime, timezone
+from functools import wraps
+from typing import Any, Dict, Optional, Tuple, Union
+
+import aiohttp
+import ansible.inventory
+import ansible.playbook
+import hvac
+import requests
+from flask import Blueprint, current_app, g, jsonify, request
+from flask_caching import Cache
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
-from flask_caching import Cache
-import aiohttp
+from requests.exceptions import RequestException
 
+from .auth import auth_manager
+from .models import AuditLog, Cluster, PlaybookExecution, db
+from .utils.config import Config
 from .utils.exceptions import (
     APIError,
-    ValidationError,
     AuthenticationError,
-    ResourceNotFoundError,
     ExternalServiceError,
-)
-from .utils.validation import (
-    CreateClusterRequest,
-    UpdateServiceAccountRequest,
-    ClusterStatusResponse,
+    ResourceNotFoundError,
+    ValidationError,
 )
 from .utils.monitoring import (
-    track_request_metrics,
-    track_playbook_execution,
     record_vault_operation,
+    track_playbook_execution,
+    track_request_metrics,
 )
-from .utils.config import Config
+from .utils.validation import (
+    ClusterStatusResponse,
+    CreateClusterRequest,
+    UpdateServiceAccountRequest,
+)
 
 bp = Blueprint("api", __name__)
 
 # Initialize extensions
 config = Config.from_env()
 cache = Cache(config={"CACHE_TYPE": config.CACHE_TYPE})
-limiter = Limiter(
-    key_func=get_remote_address, default_limits=[config.RATE_LIMIT_DEFAULT]
-)
+limiter = Limiter(key_func=get_remote_address, default_limits=[config.RATE_LIMIT_DEFAULT])
 
 # Initialize Vault client
 vault_client = hvac.Client(url=config.VAULT_ADDR, token=config.VAULT_TOKEN)
 
 
-@bp.errorhandler(APIError)
-def handle_api_error(error):
-    """Handle custom API errors."""
-    response = {"error": error.message, "error_code": error.error_code}
-    return jsonify(response), error.status_code
+class AuthProvider:
+    """
+    Abstract base class for authentication providers.
+
+    This class provides a factory method to create instances of concrete
+    authentication providers based on the configured provider type.
+    """
+
+    @staticmethod
+    def create_provider(provider_type: str):
+        """
+        Create an instance of a concrete authentication provider.
+
+        Args:
+            provider_type: The type of authentication provider to create.
+
+        Returns:
+            AuthProvider: An instance of the specified authentication provider.
+
+        Raises:
+            ValueError: If the provider type is not supported.
+        """
+        if provider_type.lower() == "okta":
+            return OktaAuthProvider()
+        elif provider_type.lower() == "keycloak":
+            return KeycloakAuthProvider()
+        raise ValueError(f"Unsupported auth provider: {provider_type}")
+
+    async def verify_token(self, token: str) -> dict:
+        """
+        Verify a JWT token.
+
+        Args:
+            token: The JWT token to verify.
+
+        Returns:
+            dict: The decoded token claims.
+
+        Raises:
+            NotImplementedError: This method must be implemented by concrete providers.
+        """
+        raise NotImplementedError()
+
+
+class OktaAuthProvider(AuthProvider):
+    """
+    Okta-specific authentication provider.
+
+    This provider implements token verification using Okta's JWT verification
+    functionality. It uses the configured Okta issuer and client ID to
+    initialize the connection.
+    """
+
+    async def verify_token(self, token: str) -> dict:
+        """
+        Verify and decode an Okta JWT token.
+
+        Args:
+            token: The JWT token to verify.
+
+        Returns:
+            dict: The decoded token claims.
+
+        Raises:
+            AuthenticationError: If token verification fails.
+        """
+        jwt_verifier = JWTVerifier(
+            issuer=current_app.config["OKTA_ISSUER"],
+            client_id=current_app.config["OKTA_CLIENT_ID"],
+        )
+        return await jwt_verifier.verify_access_token(token)
+
+
+class KeycloakAuthProvider(AuthProvider):
+    """
+    Keycloak-specific authentication provider.
+
+    This provider implements token verification using Keycloak's OpenID Connect
+    functionality. It uses the configured Keycloak server URL, client ID, realm
+    name, and client secret to initialize the connection.
+    """
+
+    def __init__(self):
+        """Initialize Keycloak OpenID client with configuration from app config."""
+        self.keycloak_openid = KeycloakOpenID(
+            server_url=current_app.config["KEYCLOAK_URL"],
+            client_id=current_app.config["KEYCLOAK_CLIENT_ID"],
+            realm_name=current_app.config["KEYCLOAK_REALM"],
+            client_secret_key=current_app.config["KEYCLOAK_CLIENT_SECRET"],
+        )
+
+    async def verify_token(self, token: str) -> dict:
+        """
+        Verify and decode a Keycloak JWT token.
+
+        Args:
+            token: The JWT token to verify.
+
+        Returns:
+            dict: The decoded token claims.
+
+        Raises:
+            AuthenticationError: If token verification fails.
+        """
+        return self.keycloak_openid.decode_token(
+            token,
+            key=self.keycloak_openid.public_key(),
+            options={
+                "verify_signature": True,
+                "verify_aud": True,
+            },
+        )
 
 
 def verify_token(f):
-    """Verify JWT token from request."""
+    """
+    Verify JWT token from request.
+
+    This decorator checks for the presence of a JWT token in the Authorization
+    header, verifies its validity using the configured authentication provider,
+    and extracts the user ID from the token claims.
+
+    Args:
+        f: The function to decorate.
+
+    Returns:
+        A decorated function that verifies the JWT token before calling the
+        original function.
+    """
 
     @wraps(f)
     async def decorated_function(*args, **kwargs):
@@ -71,11 +190,11 @@ def verify_token(f):
 
         try:
             token = auth_header.split(" ")[1]
-            jwt_verifier = JWTVerifier(
-                issuer=current_app.config["OKTA_ISSUER"],
-                client_id=current_app.config["OKTA_CLIENT_ID"],
-            )
-            claims = await jwt_verifier.verify_access_token(token)
+            provider_type = current_app.config["AUTH_PROVIDER"]
+            auth_provider = AuthProvider.create_provider(provider_type)
+            claims = await auth_provider.verify_token(token)
+
+            # Both Okta and Keycloak use 'sub' for user ID
             g.user_id = claims.get("sub")
             if not g.user_id:
                 raise AuthenticationError("Token does not contain user ID")
@@ -87,17 +206,49 @@ def verify_token(f):
     return decorated_function
 
 
+@bp.errorhandler(APIError)
+def handle_api_error(error):
+    """
+    Handle custom API errors.
+
+    This function returns a JSON response with the error message and code.
+
+    Args:
+        error: The API error to handle.
+
+    Returns:
+        A JSON response with the error message and code.
+    """
+    response = {"error": error.message, "error_code": error.error_code}
+    return jsonify(response), error.status_code
+
+
 async def log_request(user_id: str, action: str, details: str, status: str) -> None:
-    """Log an API request asynchronously."""
+    """
+    Log an API request asynchronously.
+
+    Args:
+        user_id: The ID of the user making the request.
+        action: The action being performed.
+        details: Additional details about the request.
+        status: The status of the request.
+    """
     log = AuditLog(user_id=user_id, action=action, details=details, status=status)
     db.session.add(log)
     await db.session.commit()
 
 
-async def run_playbook_async(
-    playbook_path: str, extra_vars: Dict[str, Any]
-) -> subprocess.Popen:
-    """Run an Ansible playbook asynchronously."""
+async def run_playbook_async(playbook_path: str, extra_vars: Dict[str, Any]) -> subprocess.Popen:
+    """
+    Run an Ansible playbook asynchronously.
+
+    Args:
+        playbook_path: The path to the playbook.
+        extra_vars: Additional variables to pass to the playbook.
+
+    Returns:
+        subprocess.Popen: The running playbook process.
+    """
     cmd = ["ansible-playbook", playbook_path]
     for key, value in extra_vars.items():
         cmd.extend(["-e", f"{key}={shlex.quote(str(value))}"])
@@ -115,9 +266,17 @@ async def run_playbook_async(
 @bp.route("/api/v1/clusters", methods=["POST"])
 @limiter.limit("10 per minute")
 @track_request_metrics()
-@verify_token
+@auth_manager.verify_token
 async def create_new_cluster():
-    """Create a new cluster entry in PX-Backup."""
+    """
+    Create a new cluster entry in PX-Backup.
+
+    This endpoint creates a new cluster record in the database and runs the
+    create_cluster playbook to provision the cluster.
+
+    Returns:
+        A JSON response with the created cluster ID and status.
+    """
     try:
         # Validate request
         data = CreateClusterRequest(**request.json)
@@ -145,9 +304,7 @@ async def create_new_cluster():
                     timeout=30,  # 30 second timeout
                 ) as response:
                     if response.status == 404:
-                        raise ResourceNotFoundError(
-                            f"Cluster {data.name} not found in inventory"
-                        )
+                        raise ResourceNotFoundError(f"Cluster {data.name} not found in inventory")
                     elif response.status != 200:
                         raise ExternalServiceError(
                             f"Inventory API returned status {response.status}",
@@ -190,9 +347,7 @@ async def create_new_cluster():
         await db.session.commit()
 
         # Run playbook
-        playbook_path = os.path.join(
-            current_app.config["PLAYBOOK_DIR"], "create_cluster.yml"
-        )
+        playbook_path = os.path.join(current_app.config["PLAYBOOK_DIR"], "create_cluster.yml")
 
         # Add kubeconfig and inventory data to extra vars
         extra_vars = {
@@ -247,9 +402,17 @@ async def create_new_cluster():
 @bp.route("/update_service_account", methods=["POST"])
 @limiter.limit("10 per minute")
 @track_request_metrics()
-@verify_token
+@auth_manager.verify_token
 async def update_service_account():
-    """Update service account for a Kubernetes cluster."""
+    """
+    Update service account for a Kubernetes cluster.
+
+    This endpoint updates the service account for a cluster and runs the
+    update_service_account playbook to apply the changes.
+
+    Returns:
+        A JSON response with a message and the execution ID.
+    """
     try:
         # Validate request
         data = UpdateServiceAccountRequest(**request.json)
@@ -331,9 +494,20 @@ async def update_service_account():
 @bp.route("/check_cluster_status/<cluster_name>")
 @cache.memoize(timeout=60)
 @track_request_metrics()
-@verify_token
+@auth_manager.verify_token
 async def check_cluster_status(cluster_name: str):
-    """Get status of a specific cluster."""
+    """
+    Get status of a specific cluster.
+
+    This endpoint returns the status of a cluster, including the latest playbook
+    execution status.
+
+    Args:
+        cluster_name: The name of the cluster to check.
+
+    Returns:
+        A JSON response with the cluster status.
+    """
     try:
         cluster = await Cluster.query.filter_by(cluster_name=cluster_name).first()
 
@@ -369,9 +543,17 @@ async def check_cluster_status(cluster_name: str):
 
 @bp.route("/check_status")
 @track_request_metrics()
-@verify_token
+@auth_manager.verify_token
 async def check_status():
-    """Get status of all clusters."""
+    """
+    Get status of all clusters.
+
+    This endpoint returns the status of all clusters, including the latest playbook
+    execution status.
+
+    Returns:
+        A JSON response with the cluster statuses.
+    """
     try:
         clusters = await Cluster.query.all()
         result = []
@@ -387,18 +569,14 @@ async def check_status():
                     "cluster_name": cluster.cluster_name,
                     "status": cluster.status,
                     "service_account": cluster.service_account,
-                    "playbook_status": latest_execution.status
-                    if latest_execution
-                    else None,
+                    "playbook_status": latest_execution.status if latest_execution else None,
                 }
             )
 
         return jsonify(result), 200
 
     except Exception as e:
-        await log_request(
-            g.user_id, "check_status", f"Failed to check status: {str(e)}", "error"
-        )
+        await log_request(g.user_id, "check_status", f"Failed to check status: {str(e)}", "error")
         raise
 
 
@@ -406,7 +584,15 @@ async def check_status():
 @bp.route("/health", methods=["GET"])
 @cache.cached(timeout=30)  # Cache health check for 30 seconds
 async def health_check():
-    """Health check endpoint that checks all services."""
+    """
+    Health check endpoint that checks all services.
+
+    This endpoint checks the health of the database, Vault, Redis, and Keycloak
+    services.
+
+    Returns:
+        A JSON response with the health status of each service.
+    """
     health_status = {
         "status": "healthy",
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -414,8 +600,8 @@ async def health_check():
             "database": {"status": "unknown"},
             "vault": {"status": "unknown"},
             "redis": {"status": "unknown"},
-            "keycloak": {"status": "unknown"}
-        }
+            "keycloak": {"status": "unknown"},
+        },
     }
 
     try:
@@ -424,13 +610,10 @@ async def health_check():
         db.session.execute("SELECT 1")
         health_status["services"]["database"] = {
             "status": "healthy",
-            "latency_ms": round((time.time() - start_time) * 1000, 2)
+            "latency_ms": round((time.time() - start_time) * 1000, 2),
         }
     except Exception as e:
-        health_status["services"]["database"] = {
-            "status": "unhealthy",
-            "error": str(e)
-        }
+        health_status["services"]["database"] = {"status": "unhealthy", "error": str(e)}
         health_status["status"] = "unhealthy"
 
     try:
@@ -438,21 +621,17 @@ async def health_check():
         start_time = time.time()
         async with aiohttp.ClientSession() as session:
             async with session.get(
-                f"{vault_client.url}/v1/sys/health",
-                timeout=aiohttp.ClientTimeout(total=5)
+                f"{vault_client.url}/v1/sys/health", timeout=aiohttp.ClientTimeout(total=5)
             ) as response:
                 if response.status == 200:
                     health_status["services"]["vault"] = {
                         "status": "healthy",
-                        "latency_ms": round((time.time() - start_time) * 1000, 2)
+                        "latency_ms": round((time.time() - start_time) * 1000, 2),
                     }
                 else:
                     raise Exception(f"Vault returned status {response.status}")
     except Exception as e:
-        health_status["services"]["vault"] = {
-            "status": "unhealthy",
-            "error": str(e)
-        }
+        health_status["services"]["vault"] = {"status": "unhealthy", "error": str(e)}
         health_status["status"] = "unhealthy"
 
     try:
@@ -461,13 +640,10 @@ async def health_check():
         await asyncio.wait_for(cache.ping(), timeout=5.0)
         health_status["services"]["redis"] = {
             "status": "healthy",
-            "latency_ms": round((time.time() - start_time) * 1000, 2)
+            "latency_ms": round((time.time() - start_time) * 1000, 2),
         }
     except Exception as e:
-        health_status["services"]["redis"] = {
-            "status": "unhealthy",
-            "error": str(e)
-        }
+        health_status["services"]["redis"] = {"status": "unhealthy", "error": str(e)}
         health_status["status"] = "unhealthy"
 
     try:
@@ -475,21 +651,17 @@ async def health_check():
         start_time = time.time()
         async with aiohttp.ClientSession() as session:
             async with session.get(
-                f"{config.KEYCLOAK_URL}/health",
-                timeout=aiohttp.ClientTimeout(total=5)
+                f"{config.KEYCLOAK_URL}/health", timeout=aiohttp.ClientTimeout(total=5)
             ) as response:
                 if response.status == 200:
                     health_status["services"]["keycloak"] = {
                         "status": "healthy",
-                        "latency_ms": round((time.time() - start_time) * 1000, 2)
+                        "latency_ms": round((time.time() - start_time) * 1000, 2),
                     }
                 else:
                     raise Exception(f"Keycloak returned status {response.status}")
     except Exception as e:
-        health_status["services"]["keycloak"] = {
-            "status": "unhealthy",
-            "error": str(e)
-        }
+        health_status["services"]["keycloak"] = {"status": "unhealthy", "error": str(e)}
         health_status["status"] = "unhealthy"
 
     status_code = 200 if health_status["status"] == "healthy" else 503
@@ -499,14 +671,19 @@ async def health_check():
 @bp.route("/api/v1/ready", methods=["GET"])
 @bp.route("/ready", methods=["GET"])
 async def readiness_check():
-    """Readiness probe that checks if the application is ready to serve traffic."""
+    """
+    Readiness probe that checks if the application is ready to serve traffic.
+
+    This endpoint checks the database connection to ensure the application is
+    ready to serve requests.
+
+    Returns:
+        A JSON response with the readiness status.
+    """
     try:
         # Only check database connection for readiness
         # This ensures the application can serve requests
         db.session.execute("SELECT 1")
         return jsonify({"status": "ready"}), 200
     except Exception as e:
-        return jsonify({
-            "status": "not_ready",
-            "error": str(e)
-        }), 503
+        return jsonify({"status": "not_ready", "error": str(e)}), 503

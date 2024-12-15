@@ -1,15 +1,17 @@
 """Unit tests for API routes."""
 
 import json
+
 import pytest
-from app.models import Cluster, AuditLog, PlaybookExecution
+
+from app.models import AuditLog, Cluster, PlaybookExecution
 
 
 def test_health_check(client, mock_vault, mocker):
     """Test health check endpoint."""
     # Mock Redis ping
     mocker.patch("flask_caching.Cache.ping", return_value=True)
-    
+
     # Mock Keycloak health check
     mock_response = mocker.AsyncMock()
     mock_response.status = 200
@@ -18,7 +20,7 @@ def test_health_check(client, mock_vault, mocker):
     mock_client = mocker.AsyncMock()
     mock_client.__aenter__.return_value = mock_session
     mocker.patch("aiohttp.ClientSession", return_value=mock_client)
-    
+
     response = client.get("/api/v1/health")
     assert response.status_code == 200
     data = json.loads(response.data)
@@ -27,9 +29,7 @@ def test_health_check(client, mock_vault, mocker):
 
 def test_create_cluster(client, auth_headers, sample_cluster, mock_vault, mock_ansible):
     """Test cluster creation."""
-    response = client.post(
-        "/api/v1/clusters", headers=auth_headers, json=sample_cluster
-    )
+    response = client.post("/api/v1/clusters", headers=auth_headers, json=sample_cluster)
     assert response.status_code == 201
     data = json.loads(response.data)
     assert data["name"] == sample_cluster["name"]
@@ -38,15 +38,11 @@ def test_create_cluster(client, auth_headers, sample_cluster, mock_vault, mock_a
 
 def test_create_duplicate_cluster(client, auth_headers, sample_cluster, db_cluster):
     """Test creating a cluster with duplicate name."""
-    response = client.post(
-        "/api/v1/clusters", headers=auth_headers, json=sample_cluster
-    )
+    response = client.post("/api/v1/clusters", headers=auth_headers, json=sample_cluster)
     assert response.status_code == 409
 
 
-def test_update_service_account(
-    client, auth_headers, db_cluster, mock_vault, mock_ansible
-):
+def test_update_service_account(client, auth_headers, db_cluster, mock_vault, mock_ansible):
     """Test service account update."""
     update_data = {"service_account": "new-sa", "namespace": "new-ns"}
     response = client.post(
@@ -62,9 +58,7 @@ def test_update_service_account(
 
 def test_check_cluster_status(client, auth_headers, db_cluster, mock_inventory):
     """Test cluster status check."""
-    response = client.get(
-        f"/api/v1/clusters/{db_cluster.name}/status", headers=auth_headers
-    )
+    response = client.get(f"/api/v1/clusters/{db_cluster.name}/status", headers=auth_headers)
     assert response.status_code == 200
     data = json.loads(response.data)
     assert data["status"] == "healthy"
@@ -84,9 +78,7 @@ def test_missing_auth_header(client, sample_cluster):
 
 def test_invalid_auth_token(client, sample_cluster, mock_keycloak):
     """Test request with invalid auth token."""
-    mock_keycloak.return_value.verify_access_token.side_effect = Exception(
-        "Invalid token"
-    )
+    mock_keycloak.return_value.verify_access_token.side_effect = Exception("Invalid token")
     headers = {"Authorization": "Bearer invalid-token"}
     response = client.post("/api/v1/clusters", headers=headers, json=sample_cluster)
     assert response.status_code == 401
@@ -94,7 +86,5 @@ def test_invalid_auth_token(client, sample_cluster, mock_keycloak):
 
 def test_invalid_request_data(client, auth_headers):
     """Test request with invalid data."""
-    response = client.post(
-        "/api/v1/clusters", headers=auth_headers, json={"invalid": "data"}
-    )
+    response = client.post("/api/v1/clusters", headers=auth_headers, json={"invalid": "data"})
     assert response.status_code == 400

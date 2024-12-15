@@ -1,10 +1,12 @@
 """Test configuration and fixtures."""
 
 import os
+
 import pytest
 from flask import Flask
+
 from app import create_app, db
-from app.models import Cluster, AuditLog, PlaybookExecution
+from app.models import AuditLog, Cluster, PlaybookExecution
 
 
 @pytest.fixture(autouse=True)
@@ -103,9 +105,7 @@ def mock_vault(mocker):
 def mock_inventory(mocker):
     """Mock inventory service."""
     mock = mocker.patch("aiohttp.ClientSession")
-    mock.return_value.__aenter__.return_value.get.return_value.__aenter__.return_value.status = (
-        200
-    )
+    mock.return_value.__aenter__.return_value.get.return_value.__aenter__.return_value.status = 200
     mock.return_value.__aenter__.return_value.get.return_value.__aenter__.return_value.json.return_value = {
         "status": "healthy"
     }

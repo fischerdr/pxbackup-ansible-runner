@@ -1,11 +1,12 @@
 """Health check utilities."""
 
-from typing import Dict, Any
-import aiohttp
-from sqlalchemy.sql import text
-from flask import current_app
-import hvac
 from datetime import datetime, timezone
+from typing import Any, Dict
+
+import aiohttp
+import hvac
+from flask import current_app
+from sqlalchemy.sql import text
 
 
 async def check_database_health() -> bool:

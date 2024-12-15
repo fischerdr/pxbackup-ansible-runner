@@ -1,9 +1,11 @@
 """Unit tests for database models."""
 
-import pytest
 from datetime import datetime, timezone
-from app.models import Cluster, AuditLog, PlaybookExecution
+
+import pytest
+
 from app import db
+from app.models import AuditLog, Cluster, PlaybookExecution
 
 
 def test_cluster_creation(app, sample_cluster):
@@ -57,9 +59,7 @@ def test_playbook_execution_creation(app, db_cluster):
         db.session.commit()
 
         # Query the execution
-        saved_execution = PlaybookExecution.query.filter_by(
-            cluster_id=db_cluster.id
-        ).first()
+        saved_execution = PlaybookExecution.query.filter_by(cluster_id=db_cluster.id).first()
         assert saved_execution is not None
         assert saved_execution.playbook_name == "test-playbook"
         assert saved_execution.status == "running"
@@ -109,9 +109,7 @@ def test_cascade_delete(app, db_cluster):
 
         # Verify cascade delete
         assert Cluster.query.filter_by(name=db_cluster.name).first() is None
-        assert (
-            PlaybookExecution.query.filter_by(cluster_id=db_cluster.id).first() is None
-        )
+        assert PlaybookExecution.query.filter_by(cluster_id=db_cluster.id).first() is None
 
 
 def test_model_timestamps(app, db_cluster):
@@ -123,6 +121,7 @@ def test_model_timestamps(app, db_cluster):
 
         # Update cluster
         import time
+
         original_updated_at = db_cluster.updated_at
         time.sleep(0.1)  # Add small delay to ensure different timestamp
         db_cluster.service_account = "new-sa"

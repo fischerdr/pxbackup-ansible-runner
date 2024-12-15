@@ -2,12 +2,85 @@
 
 import os
 from functools import wraps
-from flask import request, jsonify, current_app, session, redirect, url_for
-from werkzeug.exceptions import Unauthorized
+from typing import Any, Dict, Optional
+from urllib.parse import urlencode
+
+import hvac
 import jwt
 import requests
-from urllib.parse import urlencode
-import hvac
+from flask import current_app, g, jsonify, request
+from keycloak import KeycloakOpenID
+from okta_jwt_verifier import JWTVerifier
+from werkzeug.exceptions import Unauthorized
+
+
+class AuthProvider:
+    """Abstract base class for authentication providers."""
+
+    @staticmethod
+    def create_provider(provider_type: str) -> "AuthProvider":
+        """Factory method to create the appropriate auth provider."""
+        if provider_type.lower() == "okta":
+            return OktaAuthProvider()
+        elif provider_type.lower() == "keycloak":
+            return KeycloakAuthProvider()
+        raise ValueError(f"Unsupported auth provider: {provider_type}")
+
+    async def verify_token(self, token: str) -> dict:
+        """Verify and decode a JWT token."""
+        raise NotImplementedError()
+
+    def get_user_info(self, token: str) -> dict:
+        """Get user information from the token."""
+        raise NotImplementedError()
+
+
+class OktaAuthProvider(AuthProvider):
+    """Okta-specific authentication provider."""
+
+    REQUEST_TIMEOUT = 30  # seconds
+
+    def __init__(self):
+        self.issuer = current_app.config["OKTA_ISSUER"]
+        self.client_id = current_app.config["OKTA_CLIENT_ID"]
+        self.jwt_verifier = JWTVerifier(issuer=self.issuer, client_id=self.client_id)
+
+    async def verify_token(self, token: str) -> dict:
+        """Verify an Okta JWT token."""
+        return await self.jwt_verifier.verify_access_token(token)
+
+    def get_user_info(self, token: str) -> dict:
+        """Get user information from Okta."""
+        headers = {"Authorization": f"Bearer {token}"}
+        response = requests.get(
+            f"{self.issuer}/v1/userinfo", headers=headers, timeout=self.REQUEST_TIMEOUT
+        )
+        response.raise_for_status()
+        return response.json()
+
+
+class KeycloakAuthProvider(AuthProvider):
+    """Keycloak-specific authentication provider."""
+
+    def __init__(self):
+        self.keycloak_openid = KeycloakOpenID(
+            server_url=current_app.config["KEYCLOAK_URL"],
+            client_id=current_app.config["KEYCLOAK_CLIENT_ID"],
+            realm_name=current_app.config["KEYCLOAK_REALM"],
+            client_secret_key=current_app.config["KEYCLOAK_CLIENT_SECRET"],
+        )
+
+    async def verify_token(self, token: str) -> dict:
+        """Verify a Keycloak JWT token."""
+        return self.keycloak_openid.decode_token(
+            token,
+            key=self.keycloak_openid.public_key(),
+            options={"verify_signature": True, "verify_aud": True},
+        )
+
+    def get_user_info(self, token: str) -> dict:
+        """Get user information from Keycloak."""
+        return self.keycloak_openid.userinfo(token)
 
 
 class AuthManager:
@@ -15,124 +88,55 @@ class AuthManager:
 
     def __init__(self, app=None):
         self.app = app
+        self.auth_provider = None
         if app is not None:
             self.init_app(app)
 
     def init_app(self, app):
         """Initialize the auth manager with the Flask app."""
         self.app = app
+        provider_type = app.config.get("AUTH_PROVIDER", "keycloak")
+        self.auth_provider = AuthProvider.create_provider(provider_type)
 
-        # Keycloak configuration
-        self.keycloak_url = app.config["KEYCLOAK_URL"]
-        self.realm_name = app.config["KEYCLOAK_REALM"]
-        self.client_id = app.config["KEYCLOAK_CLIENT_ID"]
-        self.client_secret = app.config["KEYCLOAK_CLIENT_SECRET"]
-
-        # Vault configuration
-        self.vault_client = hvac.Client(
-            url=app.config["VAULT_ADDR"], token=app.config.get("VAULT_TOKEN")
-        )
-
-        # Cache JWKS
-        self.jwks = self._get_jwks()
-
-    def _get_jwks(self):
-        """Get the JSON Web Key Set from Keycloak."""
-        url = f"{self.keycloak_url}/realms/{self.realm_name}/protocol/openid-connect/certs"
-        response = requests.get(url)
-        response.raise_for_status()
-        return response.json()
+        # Initialize Vault client if needed
+        vault_addr = app.config.get("VAULT_ADDR")
+        vault_token = app.config.get("VAULT_TOKEN")
+        if vault_addr and vault_token:
+            self.vault_client = hvac.Client(url=vault_addr, token=vault_token)
 
     def login_required(self, f):
         """Decorator to require authentication for routes."""
 
         @wraps(f)
-        def decorated_function(*args, **kwargs):
-            token = self._get_token_from_header()
-            if not token:
-                return redirect(url_for("auth.login"))
-
+        async def decorated_function(*args, **kwargs):
             try:
-                decoded_token = self.validate_token(token)
-                # Add user info to flask.g
-                current_app.g.user = decoded_token
-                return f(*args, **kwargs)
+                auth_header = request.headers.get("Authorization")
+                if not auth_header or not auth_header.startswith("Bearer "):
+                    raise Unauthorized("No valid authorization header")
+
+                token = auth_header.split(" ")[1]
+                claims = await self.auth_provider.verify_token(token)
+
+                # Store user info in Flask g object
+                g.user_id = claims.get("sub")
+                if not g.user_id:
+                    raise Unauthorized("Token does not contain user ID")
+
+                return await f(*args, **kwargs)
             except Exception as e:
-                current_app.logger.error(f"Token validation failed: {str(e)}")
-                return redirect(url_for("auth.login"))
+                raise Unauthorized(str(e))
 
         return decorated_function
 
-    def _get_token_from_header(self):
-        """Extract token from Authorization header."""
+    def get_user_info(self) -> Optional[Dict[str, Any]]:
+        """Get information about the current user."""
         auth_header = request.headers.get("Authorization")
-        if auth_header and auth_header.startswith("Bearer "):
-            return auth_header.split(" ")[1]
-        return None
+        if not auth_header or not auth_header.startswith("Bearer "):
+            return None
 
-    def validate_token(self, token):
-        """Validate the JWT token."""
-        try:
-            header = jwt.get_unverified_header(token)
-            key = self._find_signing_key(header["kid"])
-
-            decoded_token = jwt.decode(
-                token,
-                key=key,
-                algorithms=["RS256"],
-                audience=self.client_id,
-                issuer=f"{self.keycloak_url}/realms/{self.realm_name}",
-            )
-
-            return decoded_token
-        except Exception as e:
-            current_app.logger.error(f"Token validation error: {str(e)}")
-            raise Unauthorized("Invalid token")
-
-    def _find_signing_key(self, kid):
-        """Find the signing key in JWKS."""
-        for key in self.jwks["keys"]:
-            if key["kid"] == kid:
-                return jwt.algorithms.RSAAlgorithm.from_jwk(key)
-        raise ValueError("Signing key not found")
-
-    def get_login_url(self):
-        """Get the Keycloak login URL."""
-        params = {
-            "client_id": self.client_id,
-            "response_type": "code",
-            "scope": "openid email profile",
-            "redirect_uri": url_for("auth.callback", _external=True),
-        }
-        return f"{self.keycloak_url}/realms/{self.realm_name}/protocol/openid-connect/auth?{urlencode(params)}"
-
-    def get_token(self, code):
-        """Exchange authorization code for tokens."""
-        data = {
-            "grant_type": "authorization_code",
-            "code": code,
-            "client_id": self.client_id,
-            "client_secret": self.client_secret,
-            "redirect_uri": url_for("auth.callback", _external=True),
-        }
-
-        response = requests.post(
-            f"{self.keycloak_url}/realms/{self.realm_name}/protocol/openid-connect/token",
-            data=data,
-        )
-        response.raise_for_status()
-        return response.json()
-
-    def get_vault_token(self, username, password):
-        """Get a Vault token using userpass auth."""
-        try:
-            result = self.vault_client.auth.userpass.login(
-                username=username, password=password
-            )
-            return result["auth"]["client_token"]
-        except Exception as e:
-            current_app.logger.error(f"Vault authentication error: {str(e)}")
-            raise Unauthorized("Invalid Vault credentials")
+        token = auth_header.split(" ")[1]
+        return self.auth_provider.get_user_info(token)
 
 
+# Global instance
 auth_manager = AuthManager()

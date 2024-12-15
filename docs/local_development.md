@@ -172,7 +172,7 @@ The Flask application runs in the Kind cluster, but the code is mounted as a vol
    ```bash
    # Check pod status
    kubectl get pods
-   
+
    # View pod logs
    kubectl logs <pod-name>
    ```
@@ -181,7 +181,7 @@ The Flask application runs in the Kind cluster, but the code is mounted as a vol
    ```bash
    # Check service status
    kubectl get svc
-   
+
    # Test service connectivity
    kubectl port-forward svc/<service-name> <local-port>:<service-port>
    ```
@@ -190,7 +190,7 @@ The Flask application runs in the Kind cluster, but the code is mounted as a vol
    ```bash
    # View Flask app logs
    kubectl logs -l app=flask-app
-   
+
    # Restart Flask app
    kubectl rollout restart deployment/flask-app
    ```

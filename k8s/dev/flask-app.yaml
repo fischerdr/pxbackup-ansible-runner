@@ -12,10 +12,13 @@ data:
   VAULT_TOKEN: root
   VAULT_NAMESPACE: default
   INVENTORY_API_URL: http://mock-inventory:8080
+  AUTH_PROVIDER: keycloak
   KEYCLOAK_URL: http://keycloak:8080
   KEYCLOAK_REALM: pxbackup
   KEYCLOAK_CLIENT_ID: pxbackup-client
   KEYCLOAK_CLIENT_SECRET: pxbackup-secret
+  OKTA_ISSUER: https://your-okta-domain/oauth2/default
+  OKTA_CLIENT_ID: your-okta-client-id
   GITEA_URL: http://gitea:3000
   GITEA_PLAYBOOKS_REPO: user/pxbackup-playbooks
   PLAYBOOKS_DIR: /app/playbooks
