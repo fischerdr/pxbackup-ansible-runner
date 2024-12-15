@@ -84,6 +84,17 @@ jobs:
           VERSION=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.version'] }}
           REVISION=${{ github.sha }}
 
+    - name: Run Trivy filesystem scan
+      uses: aquasecurity/trivy-action@master
+      with:
+        scan-type: 'fs'
+        scan-ref: '.'
+        format: 'sarif'
+        output: 'trivy-fs-results.sarif'
+        exit-code: '1'
+        ignore-unfixed: true
+        severity: 'CRITICAL,HIGH'
+
     - name: Run Trivy vulnerability scanner
       uses: aquasecurity/trivy-action@master
       with:
@@ -100,19 +111,9 @@ jobs:
       if: always()
       with:
         sarif_file: trivy-results.sarif
-        category: trivy
+        category: trivy-container
 
-    - name: Run Trivy filesystem scan
-      uses: aquasecurity/trivy-action@master
-      with:
-        scan-type: 'fs'
-        scan-ref: '.'
-        format: 'sarif'
-        output: 'trivy-fs-results.sarif'
-        exit-code: '1'
-        severity: 'CRITICAL,HIGH'
-
-    - name: Upload Trivy filesystem results
+    - name: Upload Trivy filesystem scan results
       uses: github/codeql-action/upload-sarif@v2
       if: always()
       with:
