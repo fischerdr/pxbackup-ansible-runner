@@ -5,9 +5,11 @@ from typing import Optional
 import os
 from functools import lru_cache
 
+
 @dataclass
 class Config:
     """Application configuration."""
+
     OKTA_ISSUER: str
     OKTA_CLIENT_ID: str
     VAULT_ADDR: str
@@ -25,25 +27,22 @@ class Config:
 
     @classmethod
     @lru_cache()
-    def from_env(cls) -> 'Config':
+    def from_env(cls) -> "Config":
         """Create configuration from environment variables."""
         return cls(
-            OKTA_ISSUER=os.environ['OKTA_ISSUER'],
-            OKTA_CLIENT_ID=os.environ['OKTA_CLIENT_ID'],
-            VAULT_ADDR=os.environ['VAULT_ADDR'],
-            VAULT_TOKEN=os.environ['VAULT_TOKEN'],
-            K8S_API_URL=os.environ['K8S_API_URL'],
-            DEBUG=os.environ.get('DEBUG', '').lower() == 'true',
-            TESTING=os.environ.get('TESTING', '').lower() == 'true',
-            SQLALCHEMY_DATABASE_URI=os.environ.get('DATABASE_URL'),
-            CACHE_REDIS_URL=os.environ.get('REDIS_URL'),
-            RATE_LIMIT_STORAGE_URL=os.environ.get('REDIS_URL'),
-            INVENTORY_API_URL=os.environ.get('INVENTORY_API_URL')
+            OKTA_ISSUER=os.environ["OKTA_ISSUER"],
+            OKTA_CLIENT_ID=os.environ["OKTA_CLIENT_ID"],
+            VAULT_ADDR=os.environ["VAULT_ADDR"],
+            VAULT_TOKEN=os.environ["VAULT_TOKEN"],
+            K8S_API_URL=os.environ["K8S_API_URL"],
+            DEBUG=os.environ.get("DEBUG", "").lower() == "true",
+            TESTING=os.environ.get("TESTING", "").lower() == "true",
+            SQLALCHEMY_DATABASE_URI=os.environ.get("DATABASE_URL"),
+            CACHE_REDIS_URL=os.environ.get("REDIS_URL"),
+            RATE_LIMIT_STORAGE_URL=os.environ.get("REDIS_URL"),
+            INVENTORY_API_URL=os.environ.get("INVENTORY_API_URL"),
         )
 
     def to_dict(self) -> dict:
         """Convert configuration to dictionary."""
-        return {
-            k: v for k, v in self.__dict__.items()
-            if not k.startswith('_')
-        }
+        return {k: v for k, v in self.__dict__.items() if not k.startswith("_")}
