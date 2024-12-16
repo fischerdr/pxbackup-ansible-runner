@@ -5,24 +5,21 @@ repos:
     -   id: trailing-whitespace
     -   id: end-of-file-fixer
     -   id: check-yaml
-        args: [--allow-multiple-documents]
     -   id: check-added-large-files
-    -   id: debug-statements
-    -   id: check-ast  # Validates Python syntax
 
 -   repo: https://github.com/psf/black
     rev: 23.12.0
     hooks:
     -   id: black
         language_version: python3
-        args: [--target-version, py39]
+
+-   repo: https://github.com/pycqa/isort
+    rev: 5.13.2
+    hooks:
+    -   id: isort
 
 -   repo: https://github.com/pycqa/flake8
-    rev: 6.1.0
+    rev: 7.0.0
     hooks:
     -   id: flake8
-        args: [--extend-ignore=E501]
-        additional_dependencies: [
-            'flake8-docstrings',
-            'flake8-bugbear',
-        ]
+        args: [--config=.flake8]
