@@ -250,3 +250,134 @@ logs/
 *.tmp
 .DS_Store
 Thumbs.db
+
+# Additional Python/Flask patterns
+*.pyc
+__pycache__/
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info
+dist/
+build/
+eggs/
+parts/
+bin/
+var/
+sdist/
+develop-eggs/
+.installed.cfg
+lib/
+lib64/
+.pytest_cache/
+
+# Virtual Environment
+.venv/
+venv/
+ENV/
+
+# Flask specific
+instance/
+.webassets-cache
+.env
+.flaskenv
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+*.db-journal
+
+# Coverage reports
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+*.cover
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# IDE specific
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+.vs/
+
+# OS specific
+.DS_Store
+Thumbs.db
+
+# Kind cluster
+kind/
+.kind/
+
+# Kubernetes
+k8s/**/*.local.yaml
+k8s/**/*.local.yml
+kubeconfig
+.kube/
+*kubeconfig*
+
+# Development
+.env.local
+.env.development
+.env.test
+.env.production
+*.local
+local/
+.local/
+
+# Cache
+.cache/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Build and dependencies
+node_modules/
+yarn-debug.log*
+yarn-error.log*
+.pnp/
+.pnp.js
+
+# Ansible specific
+*.retry
+ansible/*.retry
+inventory.local
+vault.key
+vault.txt
+*.vault
+ansible/**/*.local.yml
+ansible/**/*.local.yaml
+
+# Docker
+.docker/
+docker-compose.override.yml
+docker-compose.override.yaml
+Dockerfile.local
+
+# Python tooling
+.python-version
+poetry.lock
+pdm.lock
+.pdm.toml
+.pdm-python
+.pdm-build/
+.ruff_cache/
+.coverage
+.tox/
+.nox/
+
+# Explicitly include Windsurf rules
+!.windsurf/
+!.windsurf/**

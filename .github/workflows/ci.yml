@@ -1,0 +1,123 @@
+name: CI
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  test:
+    runs-on: [self-hosted, Linux]
+    container:
+      image: fedora:latest
+    strategy:
+      matrix:
+        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: Install dependencies
+      run: |
+        dnf install -y python3-pip gcc python3-devel
+        python -m pip install --upgrade pip
+        pip install flake8 pylint black isort mypy pytest pytest-cov bandit safety
+        if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+        if [ -f requirements-dev.txt ]; then pip install -r requirements-dev.txt; fi
+
+    - name: Check formatting with Black
+      run: black --check .
+
+    - name: Check import sorting with isort
+      run: isort --check-only --diff .
+
+    - name: Lint with flake8
+      run: |
+        flake8 . --count --show-source --statistics \
+        --per-file-ignores="__init__.py:F401"
+
+    - name: Type checking with mypy
+      run: mypy app/ tests/
+
+    - name: Security check with Bandit
+      run: bandit -r app/
+
+    - name: Check dependencies for known security vulnerabilities
+      run: safety check
+
+    - name: Check logging configuration
+      run: |
+        python -c "
+        import ast
+        import sys
+        import os
+
+        def check_logging_setup(file_path):
+            with open(file_path) as f:
+                tree = ast.parse(f.read())
+            has_logging = False
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    for name in node.names:
+                        if name.name == 'logging':
+                            has_logging = True
+                elif isinstance(node, ast.ImportFrom):
+                    if node.module == 'logging':
+                        has_logging = True
+            return has_logging
+
+        has_logging_setup = False
+        for root, _, files in os.walk('app'):
+            for file in files:
+                if file.endswith('.py'):
+                    if check_logging_setup(os.path.join(root, file)):
+                        has_logging_setup = True
+                        break
+            if has_logging_setup:
+                break
+
+        if not has_logging_setup:
+            print('Error: No logging configuration found in the application')
+            sys.exit(1)
+        "
+
+    - name: Run tests with pytest
+      run: |
+        pytest tests/ --cov=app --cov-report=xml --cov-fail-under=80
+
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v3
+      with:
+        file: ./coverage.xml
+        fail_ci_if_error: true
+
+  docker:
+    needs: test
+    runs-on: [self-hosted, Linux]
+    container:
+      image: fedora:latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Build Docker image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        push: false
+        tags: pxbkup-clstradmin:test
+        platforms: linux/amd64
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        build-args: |
+          PYTHON_VERSION=3.9
+          BASE_IMAGE=fedora:latest
