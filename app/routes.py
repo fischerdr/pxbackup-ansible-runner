@@ -8,85 +8,28 @@ import subprocess
 import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
-from typing import Any, Dict, Tuple
+from typing import Any, Callable, Dict, Tuple
 
 import aiohttp
+from config import Config
 from flask import Blueprint, current_app, g, jsonify, request
-from flask_limiter import Limiter
-from flask_limiter.util import get_remote_address
-from pydantic import ValidationError as PydanticValidationError
+from sqlalchemy import text
 
-from . import auth_manager, cache, db
-from .exceptions import AuthenticationError, ExternalServiceError, ResourceAlreadyExistsError, ResourceNotFoundError, ValidationError
-from .models import AuditLog, Cluster, PlaybookExecution
-from .schemas import ClusterStatusResponse, CreateClusterRequest, UpdateServiceAccountRequest
-from .utils import vault_client
-from .utils.config import Config
-from .utils.monitoring import record_vault_operation, track_request_metrics
+from app import auth_manager, cache, db, limiter
+from app.models import AuditLog, Cluster, PlaybookExecution
+from app.schemas import ClusterStatusResponse, CreateClusterRequest, UpdateServiceAccountRequest
+from app.utils.exceptions import ExternalServiceError, ResourceAlreadyExistsError, ResourceNotFoundError, ValidationError
+from app.utils.monitoring import record_vault_operation, track_request_metrics
+from app.utils.vault_client import vault_client
 
 bp = Blueprint("api", __name__)
 
 # Initialize rate limiter
-limiter = Limiter(key_func=get_remote_address, default_limits=["200 per day", "50 per hour"])
+limiter.init_app(current_app)
 
 
-@bp.errorhandler(ValidationError)
-def handle_validation_error(error):
-    """Handle validation errors."""
-    return jsonify({"error": str(error), "error_code": "VALIDATION_ERROR"}), 400
-
-
-@bp.errorhandler(PydanticValidationError)
-def handle_pydantic_validation_error(error):
-    """Handle Pydantic validation errors."""
-    return (
-        jsonify(
-            {
-                "error": "Invalid request data",
-                "details": error.errors(),
-                "error_code": "VALIDATION_ERROR",
-            }
-        ),
-        400,
-    )
-
-
-@bp.errorhandler(ResourceNotFoundError)
-def handle_not_found_error(error):
-    """Handle resource not found errors."""
-    return jsonify({"error": str(error), "error_code": "NOT_FOUND"}), 404
-
-
-@bp.errorhandler(ResourceAlreadyExistsError)
-def handle_already_exists_error(error):
-    """Handle resource already exists errors."""
-    return jsonify({"error": str(error), "error_code": "ALREADY_EXISTS"}), 409
-
-
-@bp.errorhandler(ExternalServiceError)
-def handle_external_service_error(error):
-    """Handle external service errors."""
-    return (
-        jsonify(
-            {
-                "error": str(error),
-                "service": error.service,
-                "error_code": "EXTERNAL_SERVICE_ERROR",
-            }
-        ),
-        503,
-    )
-
-
-@bp.errorhandler(AuthenticationError)
-def handle_authentication_error(error):
-    """Handle authentication errors."""
-    return jsonify({"error": str(error), "error_code": "AUTHENTICATION_ERROR"}), 401
-
-
-async def log_request(user_id: str, action: str, details: str, status: str) -> None:
-    """
-    Log an API request asynchronously.
+async def log_request(user_id: str, action: str, details: str, status: str):
+    """Log an API request asynchronously.
 
     Args:
         user_id: The ID of the user making the request.
@@ -94,64 +37,122 @@ async def log_request(user_id: str, action: str, details: str, status: str) -> N
         details: Additional details about the request.
         status: The status of the request.
     """
-    log = AuditLog(user_id=user_id, action=action, details=details, status=status)
+    log = AuditLog(user_id=user_id, action=action, details=details, status=status, timestamp=datetime.now(timezone.utc))
     db.session.add(log)
     await db.session.commit()
 
 
-@contextmanager
-def track_playbook_execution(playbook_name: str):
-    """Track playbook execution with logging."""
-    start_time = time.time()
-    try:
-        yield
-    except Exception as e:
-        current_app.logger.error(
-            "Playbook execution failed",
-            extra={
-                "playbook": playbook_name,
-                "error": str(e),
-                "duration": time.time() - start_time,
-            },
-        )
-        raise
-    else:
-        current_app.logger.info(
-            "Playbook execution completed",
-            extra={"playbook": playbook_name, "duration": time.time() - start_time},
-        )
-
-
-async def run_playbook_async(playbook_path: str, extra_vars: Dict[str, Any]) -> Tuple[subprocess.Popen, str]:
-    """
-    Run an Ansible playbook asynchronously.
+async def _check_service_health(name: str, check_func: Callable) -> Dict[str, Any]:
+    """Check health of a service and measure latency.
 
     Args:
-        playbook_path: The path to the playbook.
-        extra_vars: Additional variables to pass to the playbook.
+        name: Name of the service.
+        check_func: Async function that performs the health check.
 
     Returns:
-        Tuple[subprocess.Popen, str]: The running playbook process and the command string.
+        Dict[str, Any]: Service health status with latency.
     """
-    playbook_name = os.path.basename(playbook_path)
-    with track_playbook_execution(playbook_name):
-        cmd = ["ansible-playbook", playbook_path]
-        for key, value in extra_vars.items():
-            cmd.extend(["-e", f"{key}={shlex.quote(str(value))}"])
+    try:
+        start_time = time.time()
+        await check_func()
+        return {
+            "status": "healthy",
+            "latency_ms": round((time.time() - start_time) * 1000, 2),
+        }
+    except Exception as e:
+        return {"status": "unhealthy", "error": str(e)}
 
-        process = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=os.environ.copy(),
-        )
 
-        # Return both process and command string for logging
-        return process, " ".join(cmd)
+async def _check_database() -> None:
+    """Check database health."""
+    await db.session.execute(text("SELECT 1"))
+
+
+async def _check_vault() -> None:
+    """Check Vault health."""
+    async with aiohttp.ClientSession() as session:
+        async with session.get(
+            f"{vault_client.client.url}/v1/sys/health",
+            timeout=aiohttp.ClientTimeout(total=5),
+        ) as response:
+            if response.status != 200:
+                raise Exception(f"Vault returned status {response.status}")
+
+
+async def _check_redis() -> None:
+    """Check Redis health."""
+    await asyncio.wait_for(cache.ping(), timeout=5.0)
+
+
+async def _check_keycloak() -> None:
+    """Check Keycloak health."""
+    async with aiohttp.ClientSession() as session:
+        async with session.get(
+            f"{Config.from_env().KEYCLOAK_URL}/health",
+            timeout=aiohttp.ClientTimeout(total=5),
+        ) as response:
+            if response.status != 200:
+                raise Exception(f"Keycloak returned status {response.status}")
+
+
+@bp.route("/health", methods=["GET"])
+@cache.cached(timeout=30)  # Cache health check for 30 seconds
+async def health_check():
+    """Health check endpoint that checks all services.
+
+    This endpoint checks the health of the database, Vault, Redis, and Keycloak
+    services. Each service check includes latency measurements and is performed
+    with appropriate timeouts.
+
+    Returns:
+        A JSON response with the health status of each service.
+    """
+    health_status = {
+        "status": "healthy",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "services": {},
+    }
+
+    # Define service checks
+    service_checks = {
+        "database": _check_database,
+        "vault": _check_vault,
+        "redis": _check_redis,
+        "keycloak": _check_keycloak,
+    }
+
+    # Perform all health checks
+    for service_name, check_func in service_checks.items():
+        service_status = await _check_service_health(service_name, check_func)
+        health_status["services"][service_name] = service_status
+        if service_status["status"] != "healthy":
+            health_status["status"] = "unhealthy"
+
+    status_code = 200 if health_status["status"] == "healthy" else 503
+    return jsonify(health_status), status_code
+
+
+@bp.route("/ready", methods=["GET"])
+async def readiness_check():
+    """Readiness probe that checks if the application is ready to serve traffic.
+
+    This endpoint checks the database connection to ensure the application is
+    ready to serve requests.
+
+    Returns:
+        A JSON response with the readiness status.
+    """
+    try:
+        # Check database connection
+        await db.session.execute(text("SELECT 1"))
+        return jsonify({"status": "ready"}), 200
+    except Exception as e:
+        current_app.logger.error(f"Readiness check failed: {str(e)}")
+        return jsonify({"status": "not ready", "error": str(e)}), 503
 
 
 @bp.route("/clusters", methods=["POST"])
-@limiter.limit("10 per minute")
+@limiter.limit("30/minute")
 @track_request_metrics()
 @auth_manager.login_required
 async def create_new_cluster():
@@ -345,7 +346,7 @@ async def create_new_cluster():
 
 
 @bp.route("/update_service_account", methods=["POST"])
-@limiter.limit("10 per minute")
+@limiter.limit("20/minute")
 @track_request_metrics()
 @auth_manager.login_required
 async def update_service_account():
@@ -475,6 +476,7 @@ async def update_service_account():
 
 
 @bp.route("/check_cluster_status/<cluster_name>")
+@limiter.limit("60/minute")
 @cache.memoize(timeout=60)
 @track_request_metrics()
 @auth_manager.login_required
@@ -524,6 +526,7 @@ async def check_cluster_status(cluster_name: str):
 
 
 @bp.route("/check_status")
+@limiter.limit("60/minute")
 @track_request_metrics()
 @auth_manager.login_required
 async def check_status():
@@ -566,110 +569,52 @@ async def check_status():
         raise
 
 
-@bp.route("/health", methods=["GET"])
-@cache.cached(timeout=30)  # Cache health check for 30 seconds
-async def health_check():
+async def run_playbook_async(playbook_path: str, extra_vars: Dict[str, Any]) -> Tuple[subprocess.Popen, str]:
     """
-    Health check endpoint that checks all services.
+    Run an Ansible playbook asynchronously.
 
-    This endpoint checks the health of the database, Vault, Redis, and Keycloak
-    services.
+    Args:
+        playbook_path: The path to the playbook.
+        extra_vars: Additional variables to pass to the playbook.
 
     Returns:
-        A JSON response with the health status of each service.
+        Tuple[subprocess.Popen, str]: The running playbook process and the command string.
     """
-    health_status = {
-        "status": "healthy",
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "services": {
-            "database": {"status": "unknown"},
-            "vault": {"status": "unknown"},
-            "redis": {"status": "unknown"},
-            "keycloak": {"status": "unknown"},
-        },
-    }
+    playbook_name = os.path.basename(playbook_path)
+    with track_playbook_execution(playbook_name):
+        cmd = ["ansible-playbook", playbook_path]
+        for key, value in extra_vars.items():
+            cmd.extend(["-e", f"{key}={shlex.quote(str(value))}"])
 
+        process = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=os.environ.copy(),
+        )
+
+        # Return both process and command string for logging
+        return process, " ".join(cmd)
+
+
+@contextmanager
+def track_playbook_execution(playbook_name: str):
+    """Track playbook execution with logging."""
+    start_time = time.time()
     try:
-        # Check database connection
-        start_time = time.time()
-        db.session.execute("SELECT 1")
-        health_status["services"]["database"] = {
-            "status": "healthy",
-            "latency_ms": round((time.time() - start_time) * 1000, 2),
-        }
+        yield
     except Exception as e:
-        health_status["services"]["database"] = {"status": "unhealthy", "error": str(e)}
-        health_status["status"] = "unhealthy"
-
-    try:
-        # Check Vault connection with timeout
-        start_time = time.time()
-        async with aiohttp.ClientSession() as session:
-            async with session.get(
-                f"{vault_client.client.url}/v1/sys/health",
-                timeout=aiohttp.ClientTimeout(total=5),
-            ) as response:
-                if response.status == 200:
-                    health_status["services"]["vault"] = {
-                        "status": "healthy",
-                        "latency_ms": round((time.time() - start_time) * 1000, 2),
-                    }
-                else:
-                    raise Exception(f"Vault returned status {response.status}")
-    except Exception as e:
-        health_status["services"]["vault"] = {"status": "unhealthy", "error": str(e)}
-        health_status["status"] = "unhealthy"
-
-    try:
-        # Check Redis connection with timeout
-        start_time = time.time()
-        await asyncio.wait_for(cache.ping(), timeout=5.0)
-        health_status["services"]["redis"] = {
-            "status": "healthy",
-            "latency_ms": round((time.time() - start_time) * 1000, 2),
-        }
-    except Exception as e:
-        health_status["services"]["redis"] = {"status": "unhealthy", "error": str(e)}
-        health_status["status"] = "unhealthy"
-
-    try:
-        # Check Keycloak connection with timeout
-        start_time = time.time()
-        async with aiohttp.ClientSession() as session:
-            async with session.get(
-                f"{Config.from_env().KEYCLOAK_URL}/health",
-                timeout=aiohttp.ClientTimeout(total=5),
-            ) as response:
-                if response.status == 200:
-                    health_status["services"]["keycloak"] = {
-                        "status": "healthy",
-                        "latency_ms": round((time.time() - start_time) * 1000, 2),
-                    }
-                else:
-                    raise Exception(f"Keycloak returned status {response.status}")
-    except Exception as e:
-        health_status["services"]["keycloak"] = {"status": "unhealthy", "error": str(e)}
-        health_status["status"] = "unhealthy"
-
-    status_code = 200 if health_status["status"] == "healthy" else 503
-    return jsonify(health_status), status_code
-
-
-@bp.route("/ready", methods=["GET"])
-async def readiness_check():
-    """
-    Readiness probe that checks if the application is ready to serve traffic.
-
-    This endpoint checks the database connection to ensure the application is
-    ready to serve requests.
-
-    Returns:
-        A JSON response with the readiness status.
-    """
-    try:
-        # Only check database connection for readiness
-        # This ensures the application can serve requests
-        db.session.execute("SELECT 1")
-        return jsonify({"status": "ready"}), 200
-    except Exception as e:
-        return jsonify({"status": "not_ready", "error": str(e)}), 503
+        current_app.logger.error(
+            "Playbook execution failed",
+            extra={
+                "playbook": playbook_name,
+                "error": str(e),
+                "duration": time.time() - start_time,
+            },
+        )
+        raise
+    else:
+        current_app.logger.info(
+            "Playbook execution completed",
+            extra={"playbook": playbook_name, "duration": time.time() - start_time},
+        )

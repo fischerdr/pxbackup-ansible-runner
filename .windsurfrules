@@ -10,3 +10,4 @@ this application is a Flask application that takes a k8s cluster and adds it to 
 this application stores the requests in a database and the playbook execution results in a database
 make sure to update the setup_local.sh scripts when updating the k8s/dev deployment files as this is used for local development
 the flask applicationshould be named "pxbkup-clstradmin"
+always use double quotes for the value of the environment variable
