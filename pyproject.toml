@@ -1,92 +1,87 @@
 [build-system]
-requires = ["setuptools>=70.0.0"]
-build-backend = "setuptools.build_meta"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
 [project]
 name = "pxbackup-ansible-runner"
 version = "0.1.0"
-description = "PX-Backup Ansible Runner"
+description = "Ansible Runner for PX-Backup"
 requires-python = ">=3.9,<3.15"
-dependencies = [
-    "Flask==3.0.2",
-    "aiohttp>=3.9.4",
-    "beaker>=20.1",
-    "flask-caching>=2.3.1",
-    "flask-cors>=4.0.1",
-    "flask-limiter>=3.5.0",
-    "gunicorn>=23.0.0",
-    "cryptography>=42.0.5",
-    "ecdsa>=0.19.1",
-    "python-jose>=3.3.1",
-    "okta-jwt-verifier==0.2.7",
-    "python-keycloak==3.7.0",
-    "PyJWT==2.8.0",
-    "pydantic==2.5.2",
-    "marshmallow==3.20.1",
-    "prometheus-client==0.19.0",
-    "structlog==23.2.0",
-    "prometheus-flask-exporter==0.22.4",
-    "redis==5.0.3",
-    "psycopg2-binary==2.9.9",
-    "SQLAlchemy==2.0.23",
-    "alembic==1.13.0",
-    "asyncpg==0.29.0",
-    "hvac==2.1.0",
-    "kubernetes>=29.0.0",
-    "ansible-runner==2.3.4",
-    "gitpython==3.1.42",
-    "asyncio==3.4.3",
-    "httpx==0.25.2",
-    "grpcio==1.62.1",
-    "python-dotenv==1.0.0",
-    "tenacity==8.2.3",
-    "psutil==5.9.6",
-    "APScheduler==3.10.4",
-    "PyYAML==6.0.1",
-    "virtualenv>=20.26.6",
+license = "MIT"
+authors = [
+    { name = "Your Name", email = "your.email@example.com" }
 ]
 
-[tool.setuptools.packages.find]
-include = ["app*"]
+dependencies = [
+    "Flask==3.0.2",
+    "Flask-SQLAlchemy==3.1.1",
+    "Flask-Migrate==4.0.5",
+    "Flask-Cors==4.0.0",
+    "Flask-Caching==2.1.0",
+    "Flask-Limiter==3.5.0",
+    "aiohttp==3.9.3",
+    "aiohappyeyeballs==2.4.4",
+    "ansible==8.5.0",
+    "ansible-core==2.15.13",
+    "ansible-runner==2.3.4",
+    "APScheduler==3.10.4",
+    "cryptography==42.0.5",
+    "ecdsa==0.19.0",
+    "gitpython==3.1.42",
+    "gunicorn==21.2.0",
+    "hvac==2.1.0",
+    "kubernetes==29.0.0",
+    "okta-jwt-verifier==0.2.7",
+    "python-keycloak==3.7.0",
+    "prometheus-client==0.19.0",
+    "prometheus-flask-exporter==0.22.4",
+    "psycopg2-binary==2.9.9",
+    "psutil==5.9.6",
+    "PyJWT==2.8.0",
+    "python-jose==3.3.1",
+    "python-dotenv==1.0.0",
+    "pydantic==2.5.2",
+    "redis==5.0.3",
+    "requests==2.31.0",
+    "SQLAlchemy==2.0.23",
+    "structlog==23.2.0",
+    "tenacity==8.2.3",
+    "PyYAML==6.0.1",
+    "alembic==1.13.0",
+    "asyncpg==0.29.0",
+    "httpx==0.25.2",
+    "grpcio==1.62.1",
+]
 
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-python_files = ["test_*.py"]
-addopts = "--strict-markers"
-markers = [
-    "integration: marks tests as integration tests",
+[project.optional-dependencies]
+dev = [
+    "black==24.3.0",
+    "flake8==7.0.0",
+    "flake8-docstrings==1.7.0",
+    "isort==5.13.2",
+    "mypy==1.9.0",
+    "pre-commit==3.6.2",
+    "pytest==8.1.1",
+    "pytest-cov==4.1.0",
+    "bandit==1.7.8",
+    "safety>=2.3.5,<3.0.0",
 ]
 
 [tool.black]
-line-length = 100
-target-version = ['py311']
-include = '\.pyi?$'
-extend-exclude = '''
-# A regex preceded with ^/ will apply only to files and directories
-# in the root of the project.
-^/tests/data/
-'''
+line-length = 88
+target-version = ["py39", "py310", "py311", "py312", "py313", "py314"]
 
 [tool.isort]
 profile = "black"
 multi_line_output = 3
-line_length = 100
 include_trailing_comma = true
 force_grid_wrap = 0
 use_parentheses = true
-ensure_newline_before_comments = true
-skip = ["tests/data"]
-
-[tool.bandit]
-exclude_dirs = ["tests", "venv", ".venv"]
-skips = ["B404", "B603"]  # Allow subprocess usage as it's required for Ansible integration
+line_length = 88
 
 [tool.mypy]
 python_version = "3.9"
-ignore_missing_imports = true
-no_implicit_optional = true
-check_untyped_defs = true
-warn_redundant_casts = true
-warn_unused_ignores = true
 warn_return_any = true
-strict_optional = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+check_untyped_defs = true

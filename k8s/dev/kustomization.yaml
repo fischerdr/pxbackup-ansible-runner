@@ -1,0 +1,22 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - database.yaml
+  - flask-app.yaml
+  - redis.yaml
+  - vault.yaml
+  - keycloak.yaml
+  - gitea.yaml
+  - mock-inventory.yaml
+  - prometheus.yaml
+
+commonLabels:
+  environment: development
+
+namespace: pxbackup-dev
+
+configMapGenerator:
+  - name: dev-config
+    literals:
+      - ENVIRONMENT=development

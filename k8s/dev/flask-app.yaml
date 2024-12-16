@@ -6,7 +6,11 @@ data:
   FLASK_APP: app
   FLASK_ENV: development
   FLASK_DEBUG: "1"
-  SQLALCHEMY_DATABASE_URI: sqlite:///app.db
+  DB_HOST: postgres
+  DB_PORT: "5432"
+  DB_NAME: pxbackup
+  DB_USER: pxbackup
+  DB_PASSWORD: pxbackup
   REDIS_URL: redis://redis:6379/0
   VAULT_ADDR: http://vault:8200
   VAULT_TOKEN: root
@@ -53,7 +57,7 @@ spec:
     spec:
       initContainers:
       - name: init-playbooks
-        image: python:3.11-slim
+        image: pxbackup-flask:dev
         command: ['python']
         args: ['/app/init_playbooks.py']
         env:
@@ -84,23 +88,21 @@ spec:
           mountPath: /app/playbooks
         - name: runner
           mountPath: /runner
-        - name: sqlite-data
+        - name: postgres-data
           mountPath: /app/instance
       containers:
       - name: flask-app
-        image: python:3.11-slim
-        command: ['/bin/sh', '-c']
-        args:
-        - |
-          pip install -r requirements.txt && \
-          mkdir -p /app/instance && \
-          flask db upgrade && \
-          gunicorn --bind 0.0.0.0:5000 --workers 4 --threads 2 'app:create_app()'
+        image: pxbackup-flask:dev
+        command: ["gunicorn"]
+        args: ["--bind", "0.0.0.0:5000", "--workers", "4", "--threads", "2", "app:create_app()"]
         ports:
         - containerPort: 5000
         envFrom:
         - configMapRef:
             name: flask-config
+        env:
+        - name: SQLALCHEMY_DATABASE_URI
+          value: "postgresql://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}"
         volumeMounts:
         - name: app-code
           mountPath: /app
@@ -108,7 +110,7 @@ spec:
           mountPath: /app/playbooks
         - name: runner
           mountPath: /runner
-        - name: sqlite-data
+        - name: postgres-data
           mountPath: /app/instance
         resources:
           requests:
@@ -136,14 +138,14 @@ spec:
         emptyDir: {}
       - name: runner
         emptyDir: {}
-      - name: sqlite-data
+      - name: postgres-data
         persistentVolumeClaim:
-          claimName: sqlite-data
+          claimName: postgres-data
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: sqlite-data
+  name: postgres-data
 spec:
   accessModes:
     - ReadWriteOnce
