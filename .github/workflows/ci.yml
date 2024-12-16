@@ -25,7 +25,7 @@ jobs:
         # Update system
         apk update
         apk add --no-cache \
-          python3=${python-version} \
+          python3~=3.12 \
           py3-pip \
           python3-dev \
           gcc \
