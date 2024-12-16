@@ -31,7 +31,11 @@ jobs:
           gcc \
           musl-dev \
           make \
-          linux-headers
+          linux-headers \
+          libffi-dev \
+          openssl-dev \
+          cargo \
+          rust
 
         # Create and activate virtual environment
         python3 -m venv /opt/venv
@@ -41,9 +45,10 @@ jobs:
       run: |
         . /opt/venv/bin/activate
         python -m pip install --upgrade pip setuptools wheel
+        python -m pip install --no-cache-dir cryptography
         python -m pip install flake8 pylint black isort mypy pytest pytest-cov bandit safety
-        if [ -f requirements.txt ]; then python -m pip install -r requirements.txt; fi
-        if [ -f requirements-dev.txt ]; then python -m pip install -r requirements-dev.txt; fi
+        if [ -f requirements.txt ]; then python -m pip install --no-cache-dir -r requirements.txt; fi
+        if [ -f requirements-dev.txt ]; then python -m pip install --no-cache-dir -r requirements-dev.txt; fi
 
     - name: Check formatting with Black
       run: |
