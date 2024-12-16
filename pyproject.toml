@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "pxbackup-ansible-runner"
 version = "0.1.0"
 description = "PX-Backup Ansible Runner"
-requires-python = ">=3.11"
+requires-python = ">=3.9,<3.15"
 dependencies = [
     "Flask==3.0.2",
     "aiohttp>=3.9.4",
@@ -76,3 +76,17 @@ force_grid_wrap = 0
 use_parentheses = true
 ensure_newline_before_comments = true
 skip = ["tests/data"]
+
+[tool.bandit]
+exclude_dirs = ["tests", "venv", ".venv"]
+skips = ["B404", "B603"]  # Allow subprocess usage as it's required for Ansible integration
+
+[tool.mypy]
+python_version = "3.9"
+ignore_missing_imports = true
+no_implicit_optional = true
+check_untyped_defs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_return_any = true
+strict_optional = true

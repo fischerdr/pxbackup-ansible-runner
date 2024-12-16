@@ -1,3 +1,10 @@
+"""Flask application factory and configuration module.
+
+This module initializes the Flask application and its extensions, including SQLAlchemy
+for database management and PrometheusMetrics for monitoring. It follows the application
+factory pattern to create and configure the Flask application instance.
+"""
+
 import os
 
 from flask import Flask
@@ -9,6 +16,15 @@ metrics = PrometheusMetrics(app=None)
 
 
 def create_app():
+    """Create and configure the Flask application.
+
+    This function serves as the application factory, creating a new Flask instance
+    and configuring it with the necessary extensions and settings. It follows Flask's
+    application factory pattern for better modularity and testing capabilities.
+
+    Returns:
+        Flask: A configured Flask application instance ready for use.
+    """
     app = Flask(__name__)
 
     # Configure SQLAlchemy

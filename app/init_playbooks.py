@@ -1,11 +1,17 @@
-"""Initialize Ansible playbooks and requirements."""
+"""Initialize and manage Ansible playbooks.
+
+This module handles the initialization and management of Ansible playbooks,
+including cloning from a Git repository, installing Galaxy requirements,
+and verifying playbook configurations. It supports both default playbooks
+and custom configurations through environment variables.
+"""
 
 import json
 import logging
 import os
 import subprocess
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 import ansible_runner
 import git
@@ -39,7 +45,26 @@ DEFAULT_PLAYBOOKS = {
 
 
 class PlaybookConfig:
+    """Configuration wrapper for individual Ansible playbooks.
+
+    This class provides a structured way to manage playbook configurations,
+    including metadata about the playbook's requirements and variables.
+
+    Attributes:
+        name (str): Identifier for the playbook.
+        filename (str): Actual filename of the playbook.
+        required (bool): Whether the playbook is required for system operation.
+        description (str): Human-readable description of the playbook's purpose.
+        variables (list): Required variables for playbook execution.
+    """
+
     def __init__(self, name: str, config: Dict[str, Any]):
+        """Initialize a playbook configuration.
+
+        Args:
+            name (str): Identifier for the playbook.
+            config (Dict[str, Any]): Configuration dictionary containing playbook metadata.
+        """
         self.name = name
         self.filename = config.get("name", f"{name}.yml")
         self.required = config.get("required", False)
@@ -47,6 +72,11 @@ class PlaybookConfig:
         self.variables = config.get("variables", [])
 
     def to_dict(self) -> Dict[str, Any]:
+        """Convert the configuration to a dictionary.
+
+        Returns:
+            Dict[str, Any]: Dictionary representation of the playbook configuration.
+        """
         return {
             "name": self.filename,
             "required": self.required,
@@ -56,7 +86,24 @@ class PlaybookConfig:
 
 
 class AnsibleInitializer:
+    """Handles initialization and management of Ansible playbooks.
+
+    This class manages the lifecycle of Ansible playbooks, including repository
+    cloning, dependency installation, and configuration verification. It supports
+    both default playbooks and custom configurations through environment variables.
+
+    Attributes:
+        playbooks_dir (str): Directory where playbooks are stored.
+        gitea_url (str): Base URL for the Gitea server.
+        gitea_token (str): Authentication token for Gitea.
+        repo_name (str): Name of the playbooks repository.
+        collections_path (str): Path to Ansible collections.
+        roles_path (str): Path to Ansible roles.
+        playbooks (Dict[str, PlaybookConfig]): Loaded playbook configurations.
+    """
+
     def __init__(self):
+        """Initialize the Ansible environment setup."""
         self.playbooks_dir = os.environ.get("PLAYBOOKS_DIR", "/app/playbooks")
         self.gitea_url = os.environ.get("GITEA_URL", "http://gitea:3000")
         self.gitea_token = os.environ.get("GITEA_TOKEN")
@@ -72,7 +119,15 @@ class AnsibleInitializer:
         self.playbooks = self.load_playbook_config()
 
     def load_playbook_config(self) -> Dict[str, PlaybookConfig]:
-        """Load playbook configuration from environment or file."""
+        """Load playbook configuration from environment or file.
+
+        This method attempts to load playbook configurations from environment variables
+        or a configuration file. If neither is available, it falls back to default
+        configurations.
+
+        Returns:
+            Dict[str, PlaybookConfig]: Loaded playbook configurations.
+        """
         playbooks = {}
 
         # Try loading from environment variable
@@ -80,8 +135,8 @@ class AnsibleInitializer:
         if playbooks_json:
             try:
                 config = json.loads(playbooks_json)
-                for name, pb_config in config.items():
-                    playbooks[name] = PlaybookConfig(name, pb_config)
+                for _name, pb_config in config.items():
+                    playbooks[_name] = PlaybookConfig(_name, pb_config)
                 logger.info("Loaded playbook configuration from environment")
                 return playbooks
             except json.JSONDecodeError as e:
@@ -93,8 +148,8 @@ class AnsibleInitializer:
             try:
                 with open(config_path) as f:
                     config = yaml.safe_load(f)
-                for name, pb_config in config.items():
-                    playbooks[name] = PlaybookConfig(name, pb_config)
+                for _name, pb_config in config.items():
+                    playbooks[_name] = PlaybookConfig(_name, pb_config)
                 logger.info("Loaded playbook configuration from playbooks.yml")
                 return playbooks
             except Exception as e:
@@ -102,13 +157,17 @@ class AnsibleInitializer:
 
         # Fall back to default configuration
         logger.info("Using default playbook configuration")
-        for name, config in DEFAULT_PLAYBOOKS.items():
-            playbooks[name] = PlaybookConfig(name, config)
+        for _name, config in DEFAULT_PLAYBOOKS.items():
+            playbooks[_name] = PlaybookConfig(_name, config)
 
         return playbooks
 
     def get_repo_url(self) -> str:
-        """Get repository URL with authentication if token is provided."""
+        """Get repository URL with authentication if token is provided.
+
+        Returns:
+            str: Repository URL.
+        """
         base_url = f"{self.gitea_url}/{self.repo_name}.git"
         if self.gitea_token:
             if "://" in base_url:
@@ -119,7 +178,15 @@ class AnsibleInitializer:
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
     def clone_or_pull_repo(self) -> None:
-        """Clone or pull the playbooks repository."""
+        """Clone or pull the playbooks repository.
+
+        This method attempts to clone or pull the playbooks repository from the
+        specified Gitea server. If the repository does not exist, it creates a
+        default repository structure.
+
+        Raises:
+            Exception: If the repository operation fails.
+        """
         try:
             repo_url = self.get_repo_url()
 
@@ -145,13 +212,20 @@ class AnsibleInitializer:
             raise
 
     def create_default_repo(self) -> None:
-        """Create default repository structure with essential playbooks."""
+        """Create default repository structure with essential playbooks.
+
+        This method creates a default repository structure with essential playbooks
+        if the repository does not exist.
+
+        Raises:
+            Exception: If the repository creation fails.
+        """
         try:
             # Create local repository
             repo = git.Repo.init(self.playbooks_dir)
 
             # Create default playbooks
-            for name, config in DEFAULT_PLAYBOOKS.items():
+            for _name, config in DEFAULT_PLAYBOOKS.items():
                 playbook_path = os.path.join(self.playbooks_dir, config["name"])
                 with open(playbook_path, "w") as f:
                     yaml.safe_dump(
@@ -221,7 +295,11 @@ class AnsibleInitializer:
             raise
 
     def read_requirements(self) -> Dict[str, List[str]]:
-        """Read requirements files for collections and roles."""
+        """Read requirements files for collections and roles.
+
+        Returns:
+            Dict[str, List[str]]: Dictionary of requirements for collections and roles.
+        """
         requirements = {"collections": [], "roles": []}
 
         # Read collections requirements
@@ -253,7 +331,11 @@ class AnsibleInitializer:
         return requirements
 
     def install_galaxy_requirements(self, requirements: Dict[str, List[str]]) -> None:
-        """Install Ansible Galaxy requirements."""
+        """Install Ansible Galaxy requirements.
+
+        Args:
+            requirements (Dict[str, List[str]]): Dictionary of requirements for collections and roles.
+        """
         try:
             # Install collections
             if requirements["collections"]:
@@ -306,10 +388,14 @@ class AnsibleInitializer:
             raise
 
     def verify_playbooks(self) -> None:
-        """Verify required playbooks exist and are valid."""
+        """Verify required playbooks exist and are valid.
+
+        Raises:
+            FileNotFoundError: If required playbooks are missing.
+        """
         missing_required = []
 
-        for name, playbook in self.playbooks.items():
+        for _name, playbook in self.playbooks.items():
             if not playbook.required:
                 continue
 
@@ -336,7 +422,7 @@ class AnsibleInitializer:
 
     def save_playbook_config(self) -> None:
         """Save current playbook configuration to file."""
-        config = {name: playbook.to_dict() for name, playbook in self.playbooks.items()}
+        config = {_name: playbook.to_dict() for _name, playbook in self.playbooks.items()}
 
         config_path = os.path.join(self.playbooks_dir, "playbooks.yml")
         with open(config_path, "w") as f:
@@ -344,7 +430,11 @@ class AnsibleInitializer:
         logger.info("Saved playbook configuration to playbooks.yml")
 
     def initialize(self) -> bool:
-        """Main initialization method."""
+        """Start the initialization process.
+
+        Returns:
+            bool: Whether the initialization was successful.
+        """
         try:
             logger.info("Starting Ansible initialization...")
 
@@ -370,6 +460,11 @@ class AnsibleInitializer:
 
 
 def init_playbooks():
+    """Initialize Ansible playbooks.
+
+    Returns:
+        bool: Whether the initialization was successful.
+    """
     initializer = AnsibleInitializer()
     return initializer.initialize()
 
