@@ -14,7 +14,8 @@ jobs:
       options: --user root
     strategy:
       matrix:
-        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+        python-version: ["3.9", "3.10", "3.11", "3.12"]
+        # Note: 3.13 and 3.14 are not yet available in GitHub Actions
 
     steps:
     - uses: actions/checkout@v4
