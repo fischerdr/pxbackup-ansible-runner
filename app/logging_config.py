@@ -14,10 +14,11 @@ Environment Variables:
     NODE_NAME: Kubernetes node name (automatically set in k8s environment)
 """
 
-import os
 import logging
-import structlog
+import os
 from typing import Dict
+
+import structlog
 
 
 def get_k8s_context() -> Dict[str, str]:

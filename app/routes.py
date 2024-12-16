@@ -1,35 +1,25 @@
 """API routes and handlers."""
 
-import aiohttp
 import asyncio
 import json
 import os
 import shlex
 import subprocess
 import time
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Any, Dict, Tuple
-from contextlib import contextmanager
 
+import aiohttp
 from flask import Blueprint, current_app, g, jsonify, request
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from pydantic import ValidationError as PydanticValidationError
 
-from . import auth_manager, db, cache
-from .exceptions import (
-    AuthenticationError,
-    ExternalServiceError,
-    ResourceNotFoundError,
-    ResourceAlreadyExistsError,
-    ValidationError,
-)
-from .models import Cluster, PlaybookExecution, AuditLog
-from .schemas import (
-    ClusterStatusResponse,
-    CreateClusterRequest,
-    UpdateServiceAccountRequest,
-)
+from . import auth_manager, cache, db
+from .exceptions import AuthenticationError, ExternalServiceError, ResourceAlreadyExistsError, ResourceNotFoundError, ValidationError
+from .models import AuditLog, Cluster, PlaybookExecution
+from .schemas import ClusterStatusResponse, CreateClusterRequest, UpdateServiceAccountRequest
 from .utils import vault_client
 from .utils.config import Config
 from .utils.monitoring import record_vault_operation, track_request_metrics
@@ -37,9 +27,7 @@ from .utils.monitoring import record_vault_operation, track_request_metrics
 bp = Blueprint("api", __name__)
 
 # Initialize rate limiter
-limiter = Limiter(
-    key_func=get_remote_address, default_limits=["200 per day", "50 per hour"]
-)
+limiter = Limiter(key_func=get_remote_address, default_limits=["200 per day", "50 per hour"])
 
 
 @bp.errorhandler(ValidationError)
@@ -134,9 +122,7 @@ def track_playbook_execution(playbook_name: str):
         )
 
 
-async def run_playbook_async(
-    playbook_path: str, extra_vars: Dict[str, Any]
-) -> Tuple[subprocess.Popen, str]:
+async def run_playbook_async(playbook_path: str, extra_vars: Dict[str, Any]) -> Tuple[subprocess.Popen, str]:
     """
     Run an Ansible playbook asynchronously.
 
@@ -189,27 +175,19 @@ async def create_new_cluster():
         # Try to acquire lock with 10 second timeout
         lock = cache.redis.lock(lock_key, timeout=600)  # 10 minute timeout
         if not await lock.acquire(blocking=True, blocking_timeout=10):
-            raise ValidationError(
-                f"Another cluster creation for {data.name} is in progress. Please wait."
-            )
+            raise ValidationError(f"Another cluster creation for {data.name} is in progress. Please wait.")
 
         try:
             # Check if cluster exists in database
             existing = await Cluster.query.filter_by(cluster_name=data.name).first()
             if existing:
                 if not data.force:
-                    raise ResourceAlreadyExistsError(
-                        f"Cluster {data.name} already exists. Use force=true to recreate"
-                    )
+                    raise ResourceAlreadyExistsError(f"Cluster {data.name} already exists. Use force=true to recreate")
                 # If force=true, delete existing cluster and its resources
-                current_app.logger.warning(
-                    f"Force recreating existing cluster {data.name}"
-                )
+                current_app.logger.warning(f"Force recreating existing cluster {data.name}")
                 async with db.session.begin_nested():
                     # Delete associated resources in a single transaction
-                    await PlaybookExecution.query.filter_by(
-                        cluster_id=existing.id
-                    ).delete()
+                    await PlaybookExecution.query.filter_by(cluster_id=existing.id).delete()
                     await db.session.delete(existing)
                 await db.session.commit()
 
@@ -222,9 +200,7 @@ async def create_new_cluster():
                         timeout=30,  # 30 second timeout
                     ) as response:
                         if response.status == 404:
-                            raise ResourceNotFoundError(
-                                f"Cluster {data.name} not found in inventory"
-                            )
+                            raise ResourceNotFoundError(f"Cluster {data.name} not found in inventory")
                         elif response.status != 200:
                             raise ExternalServiceError(
                                 f"Inventory API returned status {response.status}",
@@ -234,9 +210,7 @@ async def create_new_cluster():
             except aiohttp.ClientError as e:
                 raise ExternalServiceError(str(e), "inventory")
             except asyncio.TimeoutError:
-                raise ExternalServiceError(
-                    "Inventory API request timed out", "inventory"
-                )
+                raise ExternalServiceError("Inventory API request timed out", "inventory")
 
             # Get kubeconfig based on provided source
             if data.kubeconfig_vault_path:
@@ -245,9 +219,7 @@ async def create_new_cluster():
                     with open("/vault/token", "r") as f:
                         vault_token = f.read().strip()
                 except Exception as e:
-                    raise ExternalServiceError(
-                        f"Failed to read vault token: {str(e)}", "vault"
-                    )
+                    raise ExternalServiceError(f"Failed to read vault token: {str(e)}", "vault")
 
                 # Configure vault client with token
                 vault_client.client.token = vault_token
@@ -262,18 +234,14 @@ async def create_new_cluster():
                         vault_data = response.data.data
                         kubeconfig_base64 = vault_data.get("kubeconfig")
                         if not kubeconfig_base64:
-                            raise ValidationError(
-                                f"No kubeconfig found at Vault path: {data.kubeconfig_vault_path}"
-                            )
+                            raise ValidationError(f"No kubeconfig found at Vault path: {data.kubeconfig_vault_path}")
                 except Exception as e:
                     await record_vault_operation("read_secret", start_time, False)
                     raise ExternalServiceError(str(e), "vault")
             elif data.kubeconfig:
                 kubeconfig_base64 = data.kubeconfig
             else:
-                raise ValidationError(
-                    "Either kubeconfig or kubeconfig_vault_path must be provided"
-                )
+                raise ValidationError("Either kubeconfig or kubeconfig_vault_path must be provided")
 
             # Create cluster record
             cluster = Cluster(
@@ -299,12 +267,8 @@ async def create_new_cluster():
                         "kubeconfig_base64": kubeconfig_base64,  # Pass as base64
                         "force": data.force,
                         "overwrite": data.force,  # Set overwrite to match force flag
-                        "inventory_id": inventory_data.get(
-                            "id"
-                        ),  # Pass inventory data to playbook
-                        "inventory_metadata": inventory_data.get(
-                            "metadata", {}
-                        ),  # Pass any additional metadata
+                        "inventory_id": inventory_data.get("id"),  # Pass inventory data to playbook
+                        "inventory_metadata": inventory_data.get("metadata", {}),  # Pass any additional metadata
                     },
                     default=str,
                 ),
@@ -323,12 +287,8 @@ async def create_new_cluster():
                 "kubeconfig_base64": kubeconfig_base64,
                 "force": data.force,
                 "overwrite": data.force,  # Set overwrite to match force flag
-                "inventory_id": inventory_data.get(
-                    "id"
-                ),  # Pass inventory data to playbook
-                "inventory_metadata": inventory_data.get(
-                    "metadata", {}
-                ),  # Pass any additional metadata
+                "inventory_id": inventory_data.get("id"),  # Pass inventory data to playbook
+                "inventory_metadata": inventory_data.get("metadata", {}),  # Pass any additional metadata
             }
 
             # Update execution record with prepared vars
@@ -336,9 +296,7 @@ async def create_new_cluster():
             await db.session.commit()
 
             # Run playbook
-            playbook_path = os.path.join(
-                current_app.config["PLAYBOOK_DIR"], "create_cluster.yml"
-            )
+            playbook_path = os.path.join(current_app.config["PLAYBOOK_DIR"], "create_cluster.yml")
 
             process, cmd_str = await run_playbook_async(playbook_path, extra_vars)
             execution.command = cmd_str
@@ -382,9 +340,7 @@ async def create_new_cluster():
             await lock.release()
 
     except Exception as e:
-        await log_request(
-            g.user_id, "create_cluster", f"Failed to create cluster: {str(e)}", "error"
-        )
+        await log_request(g.user_id, "create_cluster", f"Failed to create cluster: {str(e)}", "error")
         raise
 
 
@@ -418,9 +374,7 @@ async def update_service_account():
                 with open("/vault/token", "r") as f:
                     vault_token = f.read().strip()
             except Exception as e:
-                raise ExternalServiceError(
-                    f"Failed to read vault token: {str(e)}", "vault"
-                )
+                raise ExternalServiceError(f"Failed to read vault token: {str(e)}", "vault")
 
             # Configure vault client with token
             vault_client.client.token = vault_token
@@ -435,18 +389,14 @@ async def update_service_account():
                     vault_data = response.data.data
                     kubeconfig_base64 = vault_data.get("kubeconfig")
                     if not kubeconfig_base64:
-                        raise ValidationError(
-                            f"No kubeconfig found at Vault path: {data.kubeconfig_vault_path}"
-                        )
+                        raise ValidationError(f"No kubeconfig found at Vault path: {data.kubeconfig_vault_path}")
             except Exception as e:
                 await record_vault_operation("read_secret", start_time, False)
                 raise ExternalServiceError(str(e), "vault")
         elif data.kubeconfig:
             kubeconfig_base64 = data.kubeconfig
         else:
-            raise ValidationError(
-                "Either kubeconfig or kubeconfig_vault_path must be provided"
-            )
+            raise ValidationError("Either kubeconfig or kubeconfig_vault_path must be provided")
 
         # Update service account
         cluster.service_account = data.service_account
@@ -476,9 +426,7 @@ async def update_service_account():
         await db.session.commit()
 
         # Run playbook and update execution record
-        playbook_path = os.path.join(
-            current_app.config["PLAYBOOK_DIR"], "update_service_account.yml"
-        )
+        playbook_path = os.path.join(current_app.config["PLAYBOOK_DIR"], "update_service_account.yml")
 
         process, cmd_str = await run_playbook_async(
             playbook_path,
@@ -552,11 +500,7 @@ async def check_cluster_status(cluster_name: str):
             raise ResourceNotFoundError(f"Cluster {cluster_name} not found")
 
         # Get latest playbook execution
-        latest_execution = (
-            await PlaybookExecution.query.filter_by(cluster_id=cluster.id)
-            .order_by(PlaybookExecution.start_time.desc())
-            .first()
-        )
+        latest_execution = await PlaybookExecution.query.filter_by(cluster_id=cluster.id).order_by(PlaybookExecution.start_time.desc()).first()
 
         response = ClusterStatusResponse(
             id=cluster.id,
@@ -598,11 +542,7 @@ async def check_status():
 
         for cluster in clusters:
             # Get latest playbook execution for each cluster
-            latest_execution = (
-                await PlaybookExecution.query.filter_by(cluster_id=cluster.id)
-                .order_by(PlaybookExecution.start_time.desc())
-                .first()
-            )
+            latest_execution = await PlaybookExecution.query.filter_by(cluster_id=cluster.id).order_by(PlaybookExecution.start_time.desc()).first()
 
             status = ClusterStatusResponse(
                 id=cluster.id,
@@ -610,9 +550,7 @@ async def check_status():
                 status=cluster.status,
                 created_at=cluster.created_at.isoformat(),
                 updated_at=cluster.updated_at.isoformat(),
-                playbook_execution=latest_execution.to_dict()
-                if latest_execution
-                else None,
+                playbook_execution=(latest_execution.to_dict() if latest_execution else None),
             )
             response.append(status.dict())
 

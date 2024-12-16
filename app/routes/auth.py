@@ -43,7 +43,10 @@ def callback():
             token_response = auth_manager.get_token(code)
         elif provider == "okta":
             # Okta token exchange should be handled by the frontend
-            return jsonify({"error": "Okta callback should be handled by frontend"}), 400
+            return (
+                jsonify({"error": "Okta callback should be handled by frontend"}),
+                400,
+            )
         else:
             return jsonify({"error": f"Unsupported auth provider: {provider}"}), 400
 

@@ -2,7 +2,6 @@
 
 import time
 from contextlib import contextmanager
-from datetime import datetime, timezone
 from functools import wraps
 from typing import Callable
 
@@ -10,13 +9,9 @@ from flask import request
 from prometheus_client import Counter, Histogram
 
 # Metrics
-http_requests_total = Counter(
-    "http_requests_total", "Total HTTP requests", ["method", "endpoint", "status"]
-)
+http_requests_total = Counter("http_requests_total", "Total HTTP requests", ["method", "endpoint", "status"])
 
-http_request_duration_seconds = Histogram(
-    "http_request_duration_seconds", "HTTP request latency", ["method", "endpoint"]
-)
+http_request_duration_seconds = Histogram("http_request_duration_seconds", "HTTP request latency", ["method", "endpoint"])
 
 REQUEST_DURATION = Histogram(
     "request_duration_seconds",
@@ -75,12 +70,8 @@ def track_request_metrics() -> Callable:
             finally:
                 duration = time.time() - start_time
                 http_requests_total.labels(method=method, endpoint=endpoint, status=status).inc()
-                http_request_duration_seconds.labels(method=method, endpoint=endpoint).observe(
-                    duration
-                )
-                REQUEST_DURATION.labels(method=method, endpoint=endpoint, status=status).observe(
-                    duration
-                )
+                http_request_duration_seconds.labels(method=method, endpoint=endpoint).observe(duration)
+                REQUEST_DURATION.labels(method=method, endpoint=endpoint, status=status).observe(duration)
                 REQUEST_COUNT.labels(method=method, endpoint=endpoint, status=status).inc()
 
         return decorated_function
@@ -95,15 +86,11 @@ def track_playbook_execution(playbook_name):
     try:
         yield
         duration = time.time() - start_time
-        PLAYBOOK_EXECUTION_DURATION.labels(playbook_name=playbook_name, status="success").observe(
-            duration
-        )
+        PLAYBOOK_EXECUTION_DURATION.labels(playbook_name=playbook_name, status="success").observe(duration)
         PLAYBOOK_EXECUTION_COUNT.labels(playbook_name=playbook_name, status="success").inc()
     except Exception as e:
         duration = time.time() - start_time
-        PLAYBOOK_EXECUTION_DURATION.labels(playbook_name=playbook_name, status="failure").observe(
-            duration
-        )
+        PLAYBOOK_EXECUTION_DURATION.labels(playbook_name=playbook_name, status="failure").observe(duration)
         PLAYBOOK_EXECUTION_COUNT.labels(playbook_name=playbook_name, status="failure").inc()
         raise e
 

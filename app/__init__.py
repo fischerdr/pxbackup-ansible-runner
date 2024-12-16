@@ -10,6 +10,7 @@ import os
 from flask import Flask
 from flask_sqlalchemy import SQLAlchemy
 from prometheus_flask_exporter import PrometheusMetrics
+
 from .auth import auth_manager
 
 db = SQLAlchemy()

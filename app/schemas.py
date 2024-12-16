@@ -46,18 +46,12 @@ class CreateClusterRequest(BaseModel):
         """Validate cluster name follows DNS and security conventions."""
         # DNS naming convention check
         if not v.replace("-", "").replace(".", "").isalnum():
-            raise ValueError(
-                "Cluster name must contain only alphanumeric characters, dots, and hyphens"
-            )
+            raise ValueError("Cluster name must contain only alphanumeric characters, dots, and hyphens")
         if not v[0].isalpha() or not v[-1].isalnum():
-            raise ValueError(
-                "Cluster name must start with a letter and end with an alphanumeric character"
-            )
+            raise ValueError("Cluster name must start with a letter and end with an alphanumeric character")
         # Security check
         if "--" in v:
-            raise ValueError(
-                "Name cannot contain double hyphens (--) as this can cause issues with shell commands"
-            )
+            raise ValueError("Name cannot contain double hyphens (--) as this can cause issues with shell commands")
         return v
 
     @field_validator("namespace")
@@ -66,18 +60,12 @@ class CreateClusterRequest(BaseModel):
         """Validate namespace follows Kubernetes and security conventions."""
         # Kubernetes naming convention check
         if not v.replace("-", "").isalnum():
-            raise ValueError(
-                "Namespace must contain only alphanumeric characters and hyphens"
-            )
+            raise ValueError("Namespace must contain only alphanumeric characters and hyphens")
         if not v[0].isalpha() or not v[-1].isalnum():
-            raise ValueError(
-                "Namespace must start with a letter and end with an alphanumeric character"
-            )
+            raise ValueError("Namespace must start with a letter and end with an alphanumeric character")
         # Security check
         if "--" in v:
-            raise ValueError(
-                "Namespace cannot contain double hyphens (--) as this can cause issues with shell commands"
-            )
+            raise ValueError("Namespace cannot contain double hyphens (--) as this can cause issues with shell commands")
         return v
 
     @field_validator("service_account")
@@ -85,9 +73,7 @@ class CreateClusterRequest(BaseModel):
     def validate_service_account(cls, v: str) -> str:
         """Validate service account name follows security conventions."""
         if "--" in v:
-            raise ValueError(
-                "Service account name cannot contain double hyphens (--) as this can cause issues with shell commands"
-            )
+            raise ValueError("Service account name cannot contain double hyphens (--) as this can cause issues with shell commands")
         return v
 
     @field_validator("kubeconfig")
@@ -105,9 +91,7 @@ class CreateClusterRequest(BaseModel):
     def validate_kubeconfig_source(self) -> "CreateClusterRequest":
         """Ensure either kubeconfig or kubeconfig_vault_path is provided."""
         if bool(self.kubeconfig) == bool(self.kubeconfig_vault_path):
-            raise ValueError(
-                "Exactly one of kubeconfig or kubeconfig_vault_path must be provided"
-            )
+            raise ValueError("Exactly one of kubeconfig or kubeconfig_vault_path must be provided")
         return self
 
 
@@ -138,17 +122,11 @@ class UpdateServiceAccountRequest(BaseModel):
     def validate_cluster_name(cls, v: str) -> str:
         """Validate cluster name follows DNS and security conventions."""
         if not v.replace("-", "").replace(".", "").isalnum():
-            raise ValueError(
-                "Cluster name must contain only alphanumeric characters, dots, and hyphens"
-            )
+            raise ValueError("Cluster name must contain only alphanumeric characters, dots, and hyphens")
         if not v[0].isalpha() or not v[-1].isalnum():
-            raise ValueError(
-                "Cluster name must start with a letter and end with an alphanumeric character"
-            )
+            raise ValueError("Cluster name must start with a letter and end with an alphanumeric character")
         if "--" in v:
-            raise ValueError(
-                "Name cannot contain double hyphens (--) as this can cause issues with shell commands"
-            )
+            raise ValueError("Name cannot contain double hyphens (--) as this can cause issues with shell commands")
         return v
 
     @field_validator("service_account")
@@ -156,9 +134,7 @@ class UpdateServiceAccountRequest(BaseModel):
     def validate_service_account(cls, v: str) -> str:
         """Validate service account name follows security conventions."""
         if "--" in v:
-            raise ValueError(
-                "Service account name cannot contain double hyphens (--) as this can cause issues with shell commands"
-            )
+            raise ValueError("Service account name cannot contain double hyphens (--) as this can cause issues with shell commands")
         return v
 
 
@@ -183,6 +159,4 @@ class ClusterStatusResponse(BaseModel):
     status: str = Field(..., description="Current cluster status")
     created_at: str = Field(..., description="Creation timestamp")
     updated_at: str = Field(..., description="Last update timestamp")
-    playbook_execution: Optional[PlaybookExecutionResponse] = Field(
-        None, description="Latest playbook execution details"
-    )
+    playbook_execution: Optional[PlaybookExecutionResponse] = Field(None, description="Latest playbook execution details")

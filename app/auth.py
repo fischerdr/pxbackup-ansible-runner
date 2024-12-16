@@ -24,7 +24,6 @@ from werkzeug.exceptions import Unauthorized
 
 from .logging_config import configure_logging
 
-
 # Configure logging
 logger = configure_logging()
 

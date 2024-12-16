@@ -40,9 +40,7 @@ class VaultClient:
             # Try VAULT_URL first, fall back to VAULT_ADDR for compatibility
             vault_url = os.environ.get("VAULT_URL") or os.environ.get("VAULT_ADDR")
             if not vault_url:
-                raise ValueError(
-                    "Neither VAULT_URL nor VAULT_ADDR environment variables are set"
-                )
+                raise ValueError("Neither VAULT_URL nor VAULT_ADDR environment variables are set")
 
             self._client = hvac.Client(
                 url=vault_url,

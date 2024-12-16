@@ -238,9 +238,7 @@ class AnsibleInitializer:
                                 "tasks": [
                                     {
                                         "name": "Placeholder task",
-                                        "debug": {
-                                            "msg": "Placeholder playbook - replace with actual tasks"
-                                        },
+                                        "debug": {"msg": ("Placeholder playbook - " "replace with actual tasks")},
                                     }
                                 ],
                             }
@@ -334,7 +332,8 @@ class AnsibleInitializer:
         """Install Ansible Galaxy requirements.
 
         Args:
-            requirements (Dict[str, List[str]]): Dictionary of requirements for collections and roles.
+            requirements (Dict[str, List[str]]): Dictionary of requirements for
+                collections and roles.
         """
         try:
             # Install collections
