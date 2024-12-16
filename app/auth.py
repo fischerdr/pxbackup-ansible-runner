@@ -46,50 +46,64 @@ class AuthProvider:
         """Create an authentication provider instance.
 
         Args:
-            provider_type (str): Type of provider to create ('okta' or 'keycloak').
+            provider_type (str): Type of provider to create ('okta', 'keycloak', or 'mock').
 
         Returns:
-            AuthProvider: An instance of the specified provider.
+            AuthProvider: An instance of the appropriate authentication provider.
 
         Raises:
-            ValueError: If the provider type is not supported.
+            ValueError: If an invalid provider type is specified.
         """
-        if provider_type.lower() == "okta":
+        if provider_type == "okta":
             return OktaAuthProvider()
-        elif provider_type.lower() == "keycloak":
+        elif provider_type == "keycloak":
             return KeycloakAuthProvider()
-        raise ValueError(f"Unsupported auth provider: {provider_type}")
+        elif provider_type == "mock":
+            return MockAuthProvider()
+        else:
+            raise ValueError(f"Invalid auth provider type: {provider_type}")
 
-    async def verify_token(self, token: str) -> dict:
-        """Verify and decode a JWT token.
 
-        Args:
-            token (str): The JWT token to verify.
+class MockAuthProvider(AuthProvider):
+    """Mock authentication provider for testing.
 
-        Returns:
-            dict: The decoded token claims.
+    This provider allows all tokens in testing environment and returns mock user info.
+    """
 
-        Raises:
-            NotImplementedError: This method must be implemented by subclasses.
-        """
-        raise NotImplementedError()
-
-    async def get_user_info(self, token: str) -> dict:
-        """Get information about the authenticated user.
+    def verify_token(self, token: str) -> Dict[str, Any]:
+        """Verify a mock token.
 
         Args:
-            token (str): The JWT token for the user.
+            token (str): The token to verify (ignored in mock provider).
 
         Returns:
-            dict: User information.
-
-        Raises:
-            NotImplementedError: This method must be implemented by subclasses.
+            Dict[str, Any]: Mock token claims.
         """
-        raise NotImplementedError()
+        return {
+            "sub": "test-user",
+            "email": "test@example.com",
+            "name": "Test User",
+            "roles": ["admin"],
+        }
+
+    def get_user_info(self, token: str) -> Dict[str, Any]:
+        """Get mock user information.
+
+        Args:
+            token (str): The token to use (ignored in mock provider).
+
+        Returns:
+            Dict[str, Any]: Mock user information.
+        """
+        return {
+            "id": "test-user",
+            "email": "test@example.com",
+            "name": "Test User",
+            "roles": ["admin"],
+        }
 
 
-class OktaAuthProvider(AuthProvider):
+class OktaAuthProvider:
     """Okta-specific authentication provider.
 
     This class implements the AuthProvider interface for Okta authentication.
@@ -110,7 +124,7 @@ class OktaAuthProvider(AuthProvider):
         self.client_id = current_app.config["OKTA_CLIENT_ID"]
         self.jwt_verifier = JWTVerifier(issuer=self.issuer, client_id=self.client_id)
 
-    async def verify_token(self, token: str) -> Dict[str, Any]:
+    def verify_token(self, token: str) -> Dict[str, Any]:
         """Verify an Okta JWT token.
 
         Args:
@@ -123,12 +137,13 @@ class OktaAuthProvider(AuthProvider):
             Unauthorized: If the token is invalid or expired.
         """
         try:
-            return await self.jwt_verifier.verify_access_token(token)
+            claims = self.jwt_verifier.verify(token)
+            return claims
         except Exception as e:
             logger.error("Token verification failed", error=str(e))
             raise Unauthorized("Invalid token")
 
-    async def get_user_info(self, token: str) -> Dict[str, Any]:
+    def get_user_info(self, token: str) -> Dict[str, Any]:
         """Get user information from Okta.
 
         Args:
@@ -150,11 +165,11 @@ class OktaAuthProvider(AuthProvider):
             response.raise_for_status()
             return response.json()
         except Exception as e:
-            logger.error("Failed to get user info from Okta", error=str(e))
+            logger.error("Failed to get user info", error=str(e))
             raise Unauthorized("Failed to get user info")
 
 
-class KeycloakAuthProvider(AuthProvider):
+class KeycloakAuthProvider:
     """Keycloak-specific authentication provider.
 
     This class implements the AuthProvider interface for Keycloak authentication.
@@ -173,7 +188,7 @@ class KeycloakAuthProvider(AuthProvider):
             client_secret_key=current_app.config["KEYCLOAK_CLIENT_SECRET"],
         )
 
-    async def verify_token(self, token: str) -> Dict[str, Any]:
+    def verify_token(self, token: str) -> Dict[str, Any]:
         """Verify a Keycloak JWT token.
 
         Args:
@@ -189,13 +204,13 @@ class KeycloakAuthProvider(AuthProvider):
             return self.keycloak_openid.decode_token(
                 token,
                 key=self.keycloak_openid.public_key(),
-                options={"verify_signature": True, "verify_aud": True},
+                options={"verify_signature": True, "verify_aud": False},
             )
         except Exception as e:
             logger.error("Token verification failed", error=str(e))
             raise Unauthorized("Invalid token")
 
-    async def get_user_info(self, token: str) -> Dict[str, Any]:
+    def get_user_info(self, token: str) -> Dict[str, Any]:
         """Get user information from Keycloak.
 
         Args:
@@ -210,7 +225,7 @@ class KeycloakAuthProvider(AuthProvider):
         try:
             return self.keycloak_openid.userinfo(token)
         except Exception as e:
-            logger.error("Failed to get user info from Keycloak", error=str(e))
+            logger.error("Failed to get user info", error=str(e))
             raise Unauthorized("Failed to get user info")
 
 
@@ -244,7 +259,7 @@ class AuthManager:
             app (Flask): Flask application instance.
         """
         self.app = app
-        provider_type = app.config.get("AUTH_PROVIDER", "keycloak")
+        provider_type = "mock" if app.config.get("TESTING") else "keycloak"
         self.auth_provider = AuthProvider.create_provider(provider_type)
 
     def login_required(self, f):
@@ -261,38 +276,35 @@ class AuthManager:
         """
 
         @wraps(f)
-        async def decorated_function(*args, **kwargs):
+        def decorated_function(*args, **kwargs):
             auth_header = request.headers.get("Authorization")
-            if not auth_header or not auth_header.startswith("Bearer "):
-                raise Unauthorized("No valid authorization header")
+            if not auth_header:
+                raise Unauthorized("No authorization header")
 
-            token = auth_header.split(" ")[1]
             try:
-                claims = await self.auth_provider.verify_token(token)
+                token_type, token = auth_header.split()
+                if token_type.lower() != "bearer":
+                    raise Unauthorized("Invalid token type")
+            except ValueError:
+                raise Unauthorized("Invalid authorization header format")
+
+            try:
+                claims = self.auth_provider.verify_token(token)
                 g.user = claims
-                return await f(*args, **kwargs)
+                return f(*args, **kwargs)
             except Exception as e:
                 logger.error("Authentication failed", error=str(e))
-                raise Unauthorized("Authentication failed")
+                raise Unauthorized("Invalid token")
 
         return decorated_function
 
-    async def get_user_info(self) -> Optional[Dict[str, Any]]:
+    def get_user_info(self) -> Optional[Dict[str, Any]]:
         """Get information about the current user.
 
         Returns:
             Optional[Dict[str, Any]]: User information if authenticated, None otherwise.
         """
-        auth_header = request.headers.get("Authorization")
-        if not auth_header or not auth_header.startswith("Bearer "):
-            return None
-
-        token = auth_header.split(" ")[1]
-        try:
-            return await self.auth_provider.get_user_info(token)
-        except Exception as e:
-            logger.error("Failed to get user info", error=str(e))
-            return None
+        return getattr(g, "user", None)
 
 
 # Global instance

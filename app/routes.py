@@ -164,7 +164,7 @@ async def run_playbook_async(
         return process, " ".join(cmd)
 
 
-@bp.route("/api/v1/clusters", methods=["POST"])
+@bp.route("/clusters", methods=["POST"])
 @limiter.limit("10 per minute")
 @track_request_metrics()
 @auth_manager.login_required
@@ -628,7 +628,6 @@ async def check_status():
         raise
 
 
-@bp.route("/api/v1/health", methods=["GET"])
 @bp.route("/health", methods=["GET"])
 @cache.cached(timeout=30)  # Cache health check for 30 seconds
 async def health_check():
@@ -718,7 +717,6 @@ async def health_check():
     return jsonify(health_status), status_code
 
 
-@bp.route("/api/v1/ready", methods=["GET"])
 @bp.route("/ready", methods=["GET"])
 async def readiness_check():
     """

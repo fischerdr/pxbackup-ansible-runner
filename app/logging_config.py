@@ -37,7 +37,9 @@ def get_k8s_context() -> Dict[str, str]:
     }
 
 
-def configure_logging(app_name: str = "pxbackup-ansible-runner") -> structlog.BoundLogger:
+def configure_logging(
+    app_name: str = "pxbackup-ansible-runner",
+) -> structlog.BoundLogger:
     """Configure structured logging for the application.
 
     This function sets up structured logging using structlog with appropriate
@@ -70,23 +72,35 @@ def configure_logging(app_name: str = "pxbackup-ansible-runner") -> structlog.Bo
     k8s_context = get_k8s_context()
 
     # Configure structlog
-    structlog.configure(
-        processors=[
-            structlog.contextvars.merge_contextvars,
-            structlog.processors.add_log_level,
-            structlog.processors.TimeStamper(fmt="iso"),
-            structlog.processors.StackInfoRenderer(),
-            structlog.processors.format_exc_info,
-            structlog.processors.UnicodeDecoder(),
-            # Add Kubernetes context to all log entries
-            structlog.processors.merge_contextvars,
-            lambda logger, method_name, event_dict: {
-                **event_dict,
-                **k8s_context,
-                "app_name": app_name,
-            },
+    base_processors = [
+        structlog.stdlib.add_log_level,
+        structlog.stdlib.add_logger_name,
+        structlog.processors.TimeStamper(fmt="iso"),
+        structlog.processors.StackInfoRenderer(),
+        structlog.processors.format_exc_info,
+        structlog.processors.UnicodeDecoder(),
+        # Add Kubernetes context to all log entries
+        lambda logger, method_name, event_dict: {
+            **event_dict,
+            **k8s_context,
+            "app_name": app_name,
+        },
+    ]
+
+    # Configure based on environment
+    env = os.getenv("FLASK_ENV", "development")
+    if env == "development":
+        # More verbose logging in development with human-readable format
+        processors = base_processors + [
+            structlog.dev.ConsoleRenderer(),
+        ]
+    else:
+        processors = base_processors + [
             structlog.processors.JSONRenderer(),
-        ],
+        ]
+
+    structlog.configure(
+        processors=processors,
         wrapper_class=structlog.make_filtering_bound_logger(log_level_num),
         context_class=dict,
         logger_factory=structlog.PrintLoggerFactory(),
