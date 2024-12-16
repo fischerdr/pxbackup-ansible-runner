@@ -15,46 +15,73 @@ jobs:
     strategy:
       matrix:
         python-version: ["3.9", "3.10", "3.11", "3.12"]
-        # Note: 3.13 and 3.14 are not yet available in GitHub Actions
+        # Note: 3.13 and 3.14 are not yet available
 
     steps:
     - uses: actions/checkout@v4
 
-    - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v4
-      with:
-        python-version: ${{ matrix.python-version }}
-
-    - name: Install dependencies
+    - name: Set up Python and system dependencies
       run: |
-        dnf install -y python3-pip gcc python3-devel
-        python -m pip install --upgrade pip
-        pip install flake8 pylint black isort mypy pytest pytest-cov bandit safety
-        if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-        if [ -f requirements-dev.txt ]; then pip install -r requirements-dev.txt; fi
+        # Update system
+        dnf clean all
+        dnf makecache
+        dnf update -y
+
+        # Install Python and dependencies
+        dnf install -y \
+          python${{ matrix.python-version }} \
+          python${{ matrix.python-version }}-pip \
+          python${{ matrix.python-version }}-devel \
+          gcc \
+          make \
+          redhat-rpm-config
+
+        # Create and activate virtual environment
+        python${{ matrix.python-version }} -m venv /opt/venv
+        . /opt/venv/bin/activate
+
+    - name: Install Python packages
+      run: |
+        . /opt/venv/bin/activate
+        python -m pip install --upgrade pip setuptools wheel
+        python -m pip install flake8 pylint black isort mypy pytest pytest-cov bandit safety
+        if [ -f requirements.txt ]; then python -m pip install -r requirements.txt; fi
+        if [ -f requirements-dev.txt ]; then python -m pip install -r requirements-dev.txt; fi
 
     - name: Check formatting with Black
-      run: black --check .
+      run: |
+        . /opt/venv/bin/activate
+        black --check .
 
     - name: Check import sorting with isort
-      run: isort --check-only --diff .
+      run: |
+        . /opt/venv/bin/activate
+        isort --check-only --diff .
 
     - name: Lint with flake8
       run: |
+        . /opt/venv/bin/activate
         flake8 . --count --show-source --statistics \
         --per-file-ignores="__init__.py:F401"
 
     - name: Type checking with mypy
-      run: mypy app/ tests/
+      run: |
+        . /opt/venv/bin/activate
+        mypy app/ tests/
 
     - name: Security check with Bandit
-      run: bandit -r app/
+      run: |
+        . /opt/venv/bin/activate
+        bandit -r app/
 
     - name: Check dependencies for known security vulnerabilities
-      run: safety check
+      run: |
+        . /opt/venv/bin/activate
+        safety check
 
     - name: Check logging configuration
       run: |
+        . /opt/venv/bin/activate
         python -c "
         import ast
         import sys
@@ -91,6 +118,7 @@ jobs:
 
     - name: Run tests with pytest
       run: |
+        . /opt/venv/bin/activate
         pytest tests/ --cov=app --cov-report=xml --cov-fail-under=80
 
     - name: Upload coverage to Codecov
