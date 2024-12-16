@@ -12,7 +12,6 @@ ansible-core==2.15.13
 ansible-runner==2.3.4
 APScheduler==3.10.4
 cryptography==42.0.5
-ecdsa==0.19.0
 gitpython==3.1.42
 gunicorn==21.2.0
 hvac==2.1.0
@@ -24,7 +23,6 @@ prometheus-flask-exporter==0.22.4
 psycopg2-binary==2.9.9
 psutil==5.9.6
 PyJWT==2.8.0
-python-jose==3.3.1
 python-dotenv==1.0.0
 pydantic==2.5.2
 redis==5.0.3
