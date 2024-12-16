@@ -10,12 +10,12 @@ jobs:
   test:
     runs-on: ubuntu-latest
     container:
-      image: fedora:latest
+      image: alpine:latest
       options: --user root
     strategy:
       matrix:
-        python-version: ["3.9", "3.10", "3.11", "3.12"]
-        # Note: 3.13 and 3.14 are not yet available
+        python-version: ["3.12"]
+        # Will expand to other versions later
 
     steps:
     - uses: actions/checkout@v4
@@ -23,21 +23,18 @@ jobs:
     - name: Set up Python and system dependencies
       run: |
         # Update system
-        dnf clean all
-        dnf makecache
-        dnf update -y
-
-        # Install Python and dependencies
-        dnf install -y \
-          python${{ matrix.python-version }} \
-          python${{ matrix.python-version }}-pip \
-          python${{ matrix.python-version }}-devel \
+        apk update
+        apk add --no-cache \
+          python3=${python-version} \
+          py3-pip \
+          python3-dev \
           gcc \
+          musl-dev \
           make \
-          redhat-rpm-config
+          linux-headers
 
         # Create and activate virtual environment
-        python${{ matrix.python-version }} -m venv /opt/venv
+        python3 -m venv /opt/venv
         . /opt/venv/bin/activate
 
     - name: Install Python packages
