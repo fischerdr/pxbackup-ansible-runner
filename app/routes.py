@@ -1,227 +1,93 @@
 """API routes and handlers."""
 
+import aiohttp
 import asyncio
+import json
 import os
 import shlex
 import subprocess
 import time
 from datetime import datetime, timezone
-from functools import wraps
-from typing import Any, Dict, Optional, Tuple, Union
+from typing import Any, Dict, Tuple
+from contextlib import contextmanager
 
-import aiohttp
-import ansible.inventory
-import ansible.playbook
-import hvac
-import requests
 from flask import Blueprint, current_app, g, jsonify, request
-from flask_caching import Cache
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
-from requests.exceptions import RequestException
+from pydantic import ValidationError as PydanticValidationError
 
-from .auth import auth_manager
-from .models import AuditLog, Cluster, PlaybookExecution, db
-from .utils.config import Config
-from .utils.exceptions import (
-    APIError,
+from . import auth_manager, db, cache
+from .exceptions import (
     AuthenticationError,
     ExternalServiceError,
     ResourceNotFoundError,
+    ResourceAlreadyExistsError,
     ValidationError,
 )
-from .utils.monitoring import (
-    record_vault_operation,
-    track_playbook_execution,
-    track_request_metrics,
-)
-from .utils.validation import (
+from .models import Cluster, PlaybookExecution, AuditLog
+from .schemas import (
     ClusterStatusResponse,
     CreateClusterRequest,
     UpdateServiceAccountRequest,
 )
+from .utils import vault_client
+from .utils.config import Config
+from .utils.monitoring import record_vault_operation, track_request_metrics
 
 bp = Blueprint("api", __name__)
 
-# Initialize extensions
-config = Config.from_env()
-cache = Cache()
-cache.init_app(current_app, config={"CACHE_TYPE": config.CACHE_TYPE})
-limiter = Limiter(key_func=get_remote_address, default_limits=[config.RATE_LIMIT_DEFAULT])
-
-# Initialize Vault client
-vault_client = hvac.Client(url=config.VAULT_ADDR, token=config.VAULT_TOKEN)
+# Initialize rate limiter
+limiter = Limiter(key_func=get_remote_address, default_limits=["200 per day", "50 per hour"])
 
 
-class AuthProvider:
-    """
-    Abstract base class for authentication providers.
-
-    This class provides a factory method to create instances of concrete
-    authentication providers based on the configured provider type.
-    """
-
-    @staticmethod
-    def create_provider(provider_type: str):
-        """
-        Create an instance of a concrete authentication provider.
-
-        Args:
-            provider_type: The type of authentication provider to create.
-
-        Returns:
-            AuthProvider: An instance of the specified authentication provider.
-
-        Raises:
-            ValueError: If the provider type is not supported.
-        """
-        if provider_type.lower() == "okta":
-            return OktaAuthProvider()
-        elif provider_type.lower() == "keycloak":
-            return KeycloakAuthProvider()
-        raise ValueError(f"Unsupported auth provider: {provider_type}")
-
-    async def verify_token(self, token: str) -> dict:
-        """
-        Verify a JWT token.
-
-        Args:
-            token: The JWT token to verify.
-
-        Returns:
-            dict: The decoded token claims.
-
-        Raises:
-            NotImplementedError: This method must be implemented by concrete providers.
-        """
-        raise NotImplementedError()
+@bp.errorhandler(ValidationError)
+def handle_validation_error(error):
+    """Handle validation errors."""
+    return jsonify({"error": str(error), "error_code": "VALIDATION_ERROR"}), 400
 
 
-class OktaAuthProvider(AuthProvider):
-    """
-    Okta-specific authentication provider.
-
-    This provider implements token verification using Okta's JWT verification
-    functionality. It uses the configured Okta issuer and client ID to
-    initialize the connection.
-    """
-
-    async def verify_token(self, token: str) -> dict:
-        """
-        Verify and decode an Okta JWT token.
-
-        Args:
-            token: The JWT token to verify.
-
-        Returns:
-            dict: The decoded token claims.
-
-        Raises:
-            AuthenticationError: If token verification fails.
-        """
-        jwt_verifier = JWTVerifier(
-            issuer=current_app.config["OKTA_ISSUER"],
-            client_id=current_app.config["OKTA_CLIENT_ID"],
-        )
-        return await jwt_verifier.verify_access_token(token)
+@bp.errorhandler(PydanticValidationError)
+def handle_pydantic_validation_error(error):
+    """Handle Pydantic validation errors."""
+    return (
+        jsonify(
+            {
+                "error": "Invalid request data",
+                "details": error.errors(),
+                "error_code": "VALIDATION_ERROR",
+            }
+        ),
+        400,
+    )
 
 
-class KeycloakAuthProvider(AuthProvider):
-    """
-    Keycloak-specific authentication provider.
-
-    This provider implements token verification using Keycloak's OpenID Connect
-    functionality. It uses the configured Keycloak server URL, client ID, realm
-    name, and client secret to initialize the connection.
-    """
-
-    def __init__(self):
-        """Initialize Keycloak OpenID client with configuration from app config."""
-        self.keycloak_openid = KeycloakOpenID(
-            server_url=current_app.config["KEYCLOAK_URL"],
-            client_id=current_app.config["KEYCLOAK_CLIENT_ID"],
-            realm_name=current_app.config["KEYCLOAK_REALM"],
-            client_secret_key=current_app.config["KEYCLOAK_CLIENT_SECRET"],
-        )
-
-    async def verify_token(self, token: str) -> dict:
-        """
-        Verify and decode a Keycloak JWT token.
-
-        Args:
-            token: The JWT token to verify.
-
-        Returns:
-            dict: The decoded token claims.
-
-        Raises:
-            AuthenticationError: If token verification fails.
-        """
-        return self.keycloak_openid.decode_token(
-            token,
-            key=self.keycloak_openid.public_key(),
-            options={
-                "verify_signature": True,
-                "verify_aud": True,
-            },
-        )
+@bp.errorhandler(ResourceNotFoundError)
+def handle_not_found_error(error):
+    """Handle resource not found errors."""
+    return jsonify({"error": str(error), "error_code": "NOT_FOUND"}), 404
 
 
-def verify_token(f):
-    """
-    Verify JWT token from request.
-
-    This decorator checks for the presence of a JWT token in the Authorization
-    header, verifies its validity using the configured authentication provider,
-    and extracts the user ID from the token claims.
-
-    Args:
-        f: The function to decorate.
-
-    Returns:
-        A decorated function that verifies the JWT token before calling the
-        original function.
-    """
-
-    @wraps(f)
-    async def decorated_function(*args, **kwargs):
-        auth_header = request.headers.get("Authorization")
-        if not auth_header:
-            raise AuthenticationError("No token provided")
-
-        try:
-            token = auth_header.split(" ")[1]
-            provider_type = current_app.config["AUTH_PROVIDER"]
-            auth_provider = AuthProvider.create_provider(provider_type)
-            claims = await auth_provider.verify_token(token)
-
-            # Both Okta and Keycloak use 'sub' for user ID
-            g.user_id = claims.get("sub")
-            if not g.user_id:
-                raise AuthenticationError("Token does not contain user ID")
-
-            return await f(*args, **kwargs)
-        except Exception as e:
-            raise AuthenticationError(str(e))
-
-    return decorated_function
+@bp.errorhandler(ResourceAlreadyExistsError)
+def handle_already_exists_error(error):
+    """Handle resource already exists errors."""
+    return jsonify({"error": str(error), "error_code": "ALREADY_EXISTS"}), 409
 
 
-@bp.errorhandler(APIError)
-def handle_api_error(error):
-    """
-    Handle custom API errors.
+@bp.errorhandler(ExternalServiceError)
+def handle_external_service_error(error):
+    """Handle external service errors."""
+    return (
+        jsonify(
+            {"error": str(error), "service": error.service, "error_code": "EXTERNAL_SERVICE_ERROR"}
+        ),
+        503,
+    )
 
-    This function returns a JSON response with the error message and code.
 
-    Args:
-        error: The API error to handle.
-
-    Returns:
-        A JSON response with the error message and code.
-    """
-    response = {"error": error.message, "error_code": error.error_code}
-    return jsonify(response), error.status_code
+@bp.errorhandler(AuthenticationError)
+def handle_authentication_error(error):
+    """Handle authentication errors."""
+    return jsonify({"error": str(error), "error_code": "AUTHENTICATION_ERROR"}), 401
 
 
 async def log_request(user_id: str, action: str, details: str, status: str) -> None:
@@ -239,7 +105,32 @@ async def log_request(user_id: str, action: str, details: str, status: str) -> N
     await db.session.commit()
 
 
-async def run_playbook_async(playbook_path: str, extra_vars: Dict[str, Any]) -> subprocess.Popen:
+@contextmanager
+def track_playbook_execution(playbook_name: str):
+    """Track playbook execution with logging."""
+    start_time = time.time()
+    try:
+        yield
+    except Exception as e:
+        current_app.logger.error(
+            "Playbook execution failed",
+            extra={
+                "playbook": playbook_name,
+                "error": str(e),
+                "duration": time.time() - start_time,
+            },
+        )
+        raise
+    else:
+        current_app.logger.info(
+            "Playbook execution completed",
+            extra={"playbook": playbook_name, "duration": time.time() - start_time},
+        )
+
+
+async def run_playbook_async(
+    playbook_path: str, extra_vars: Dict[str, Any]
+) -> Tuple[subprocess.Popen, str]:
     """
     Run an Ansible playbook asynchronously.
 
@@ -248,20 +139,23 @@ async def run_playbook_async(playbook_path: str, extra_vars: Dict[str, Any]) -> 
         extra_vars: Additional variables to pass to the playbook.
 
     Returns:
-        subprocess.Popen: The running playbook process.
+        Tuple[subprocess.Popen, str]: The running playbook process and the command string.
     """
-    cmd = ["ansible-playbook", playbook_path]
-    for key, value in extra_vars.items():
-        cmd.extend(["-e", f"{key}={shlex.quote(str(value))}"])
+    playbook_name = os.path.basename(playbook_path)
+    with track_playbook_execution(playbook_name):
+        cmd = ["ansible-playbook", playbook_path]
+        for key, value in extra_vars.items():
+            cmd.extend(["-e", f"{key}={shlex.quote(str(value))}"])
 
-    process = await asyncio.create_subprocess_exec(
-        *cmd,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        env=os.environ.copy(),
-    )
+        process = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=os.environ.copy(),
+        )
 
-    return process
+        # Return both process and command string for logging
+        return process, " ".join(cmd)
 
 
 @bp.route("/api/v1/clusters", methods=["POST"])
@@ -273,7 +167,8 @@ async def create_new_cluster():
     Create a new cluster entry in PX-Backup.
 
     This endpoint creates a new cluster record in the database and runs the
-    create_cluster playbook to provision the cluster.
+    create_cluster playbook to provision the cluster. Uses Redis distributed
+    locking to prevent concurrent creation of the same cluster.
 
     Returns:
         A JSON response with the created cluster ID and status.
@@ -282,116 +177,184 @@ async def create_new_cluster():
         # Validate request
         data = CreateClusterRequest(**request.json)
 
-        # Check if cluster exists in database
-        existing = await Cluster.query.filter_by(cluster_name=data.name).first()
-        if existing:
-            if not data.force:
-                raise ResourceNotFoundError(
-                    f"Cluster {data.name} already exists. Use force=true to recreate"
-                )
-            # If force=true, delete existing cluster
-            current_app.logger.warning(f"Force recreating existing cluster {data.name}")
-            # Delete associated playbook executions
-            await PlaybookExecution.query.filter_by(cluster_id=existing.id).delete()
-            await db.session.delete(existing)
+        # Create Redis lock key
+        lock_key = f"cluster_creation:{data.name}"
+
+        # Try to acquire lock with 10 second timeout
+        lock = cache.redis.lock(lock_key, timeout=600)  # 10 minute timeout
+        if not await lock.acquire(blocking=True, blocking_timeout=10):
+            raise ValidationError(
+                f"Another cluster creation for {data.name} is in progress. Please wait."
+            )
+
+        try:
+            # Check if cluster exists in database
+            existing = await Cluster.query.filter_by(cluster_name=data.name).first()
+            if existing:
+                if not data.force:
+                    raise ResourceAlreadyExistsError(
+                        f"Cluster {data.name} already exists. Use force=true to recreate"
+                    )
+                # If force=true, delete existing cluster and its resources
+                current_app.logger.warning(f"Force recreating existing cluster {data.name}")
+                async with db.session.begin_nested():
+                    # Delete associated resources in a single transaction
+                    await PlaybookExecution.query.filter_by(cluster_id=existing.id).delete()
+                    await db.session.delete(existing)
+                await db.session.commit()
+
+            # Check if cluster exists in inventory (required)
+            inventory_url = current_app.config["INVENTORY_API_URL"]
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(
+                        f"{inventory_url}/clusters/{data.name}",
+                        timeout=30,  # 30 second timeout
+                    ) as response:
+                        if response.status == 404:
+                            raise ResourceNotFoundError(
+                                f"Cluster {data.name} not found in inventory"
+                            )
+                        elif response.status != 200:
+                            raise ExternalServiceError(
+                                f"Inventory API returned status {response.status}",
+                                "inventory",
+                            )
+                        inventory_data = await response.json()
+            except aiohttp.ClientError as e:
+                raise ExternalServiceError(str(e), "inventory")
+            except asyncio.TimeoutError:
+                raise ExternalServiceError("Inventory API request timed out", "inventory")
+
+            # Get kubeconfig based on provided source
+            if data.kubeconfig_vault_path:
+                # Read vault token from sidecar file
+                try:
+                    with open("/vault/token", "r") as f:
+                        vault_token = f.read().strip()
+                except Exception as e:
+                    raise ExternalServiceError(f"Failed to read vault token: {str(e)}", "vault")
+
+                # Configure vault client with token
+                vault_client.client.token = vault_token
+
+                start_time = time.time()
+                try:
+                    async with vault_client.client.secrets.kv.v2.read_secret_version(
+                        path=data.kubeconfig_vault_path,
+                        mount_point=os.environ.get("VAULT_NAMESPACE", "default"),
+                    ) as response:
+                        await record_vault_operation("read_secret", start_time, True)
+                        vault_data = response.data.data
+                        kubeconfig_base64 = vault_data.get("kubeconfig")
+                        if not kubeconfig_base64:
+                            raise ValidationError(
+                                f"No kubeconfig found at Vault path: {data.kubeconfig_vault_path}"
+                            )
+                except Exception as e:
+                    await record_vault_operation("read_secret", start_time, False)
+                    raise ExternalServiceError(str(e), "vault")
+            elif data.kubeconfig:
+                kubeconfig_base64 = data.kubeconfig
+            else:
+                raise ValidationError("Either kubeconfig or kubeconfig_vault_path must be provided")
+
+            # Create cluster record
+            cluster = Cluster(
+                cluster_name=data.name,
+                service_account=data.service_account,
+                namespace=data.namespace,
+                status="creating",
+            )
+            db.session.add(cluster)
             await db.session.commit()
 
-        # Check if cluster exists in inventory (required)
-        inventory_url = current_app.config["INVENTORY_API_URL"]
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(
-                    f"{inventory_url}/clusters/{data.name}",
-                    timeout=30,  # 30 second timeout
-                ) as response:
-                    if response.status == 404:
-                        raise ResourceNotFoundError(f"Cluster {data.name} not found in inventory")
-                    elif response.status != 200:
-                        raise ExternalServiceError(
-                            f"Inventory API returned status {response.status}",
-                            "inventory",
-                        )
-                    inventory_data = await response.json()
-        except aiohttp.ClientError as e:
-            raise ExternalServiceError(str(e), "inventory")
-        except asyncio.TimeoutError:
-            raise ExternalServiceError("Inventory API request timed out", "inventory")
+            # Create playbook execution record with command info
+            execution = PlaybookExecution(
+                playbook_name="create_cluster.yml",
+                status="running",
+                cluster_id=cluster.id,
+                start_time=datetime.now(timezone.utc),
+                extra_vars=json.dumps(
+                    {
+                        "cluster_name": data.name,
+                        "service_account": data.service_account,
+                        "namespace": data.namespace,
+                        "kubeconfig_base64": kubeconfig_base64,  # Pass as base64
+                        "force": data.force,
+                        "overwrite": data.force,  # Set overwrite to match force flag
+                        "inventory_id": inventory_data.get("id"),  # Pass inventory data to playbook
+                        "inventory_metadata": inventory_data.get(
+                            "metadata", {}
+                        ),  # Pass any additional metadata
+                    },
+                    default=str,
+                ),
+                command="",  # Will be updated after playbook starts
+                pid=None,  # Will be updated after playbook starts
+                return_code=None,
+            )
+            db.session.add(execution)
+            await db.session.commit()
 
-        # Get kubeconfig based on provided source
-        if data.kubeconfig_vault_path:
-            start_time = time.time()
-            try:
-                vault_response = await vault_client.secrets.kv.v2.read_secret_version(
-                    path=data.kubeconfig_vault_path,
-                    mount_point=os.environ.get("VAULT_NAMESPACE", "default"),
-                )
-                await record_vault_operation("read_secret", start_time, True)
-                kubeconfig = vault_response["data"]["data"].get("kubeconfig")
-                if not kubeconfig:
-                    raise ValidationError(
-                        f"No kubeconfig found at Vault path: {data.kubeconfig_vault_path}"
-                    )
-            except Exception as e:
-                await record_vault_operation("read_secret", start_time, False)
-                raise ExternalServiceError(str(e), "vault")
-        else:
-            kubeconfig = data.kubeconfig
+            # Add kubeconfig and inventory data to extra vars
+            extra_vars = {
+                "cluster_name": data.name,
+                "service_account": data.service_account,
+                "namespace": data.namespace,
+                "kubeconfig_base64": kubeconfig_base64,
+                "force": data.force,
+                "overwrite": data.force,  # Set overwrite to match force flag
+                "inventory_id": inventory_data.get("id"),  # Pass inventory data to playbook
+                "inventory_metadata": inventory_data.get(
+                    "metadata", {}
+                ),  # Pass any additional metadata
+            }
 
-        # Create cluster record
-        cluster = Cluster(
-            cluster_name=data.name,
-            service_account=data.service_account,
-            namespace=data.namespace,
-            status="creating",
-        )
-        db.session.add(cluster)
-        await db.session.commit()
+            # Update execution record with prepared vars
+            execution.extra_vars = json.dumps(extra_vars, default=str)
+            await db.session.commit()
 
-        # Run playbook
-        playbook_path = os.path.join(current_app.config["PLAYBOOK_DIR"], "create_cluster.yml")
+            # Run playbook
+            playbook_path = os.path.join(current_app.config["PLAYBOOK_DIR"], "create_cluster.yml")
 
-        # Add kubeconfig and inventory data to extra vars
-        extra_vars = {
-            "cluster_name": data.name,
-            "service_account": data.service_account,
-            "namespace": data.namespace,
-            "kubeconfig": kubeconfig,
-            "force": data.force,
-            "overwrite": data.force,  # Set overwrite to match force flag
-            "inventory_id": inventory_data.get("id"),  # Pass inventory data to playbook
-            "inventory_metadata": inventory_data.get(
-                "metadata", {}
-            ),  # Pass any additional metadata
-        }
+            process, cmd_str = await run_playbook_async(playbook_path, extra_vars)
+            execution.command = cmd_str
+            execution.pid = process.pid
+            await db.session.commit()
 
-        process = await run_playbook_async(playbook_path, extra_vars)
+            # Return response in documented format
+            return (
+                jsonify(
+                    {
+                        "id": cluster.id,
+                        "name": cluster.cluster_name,
+                        "status": cluster.status,
+                        "created_at": cluster.created_at.isoformat(),
+                        "updated_at": cluster.updated_at.isoformat(),
+                        "playbook_execution": {
+                            "id": execution.id,
+                            "status": execution.status,
+                            "playbook": execution.playbook_name,
+                            "start_time": execution.start_time.isoformat(),
+                            "extra_vars": json.loads(execution.extra_vars),
+                            "command": execution.command,
+                            "pid": execution.pid,
+                            "return_code": execution.return_code,
+                        },
+                    }
+                ),
+                201,
+            )
 
-        # Create playbook execution record
-        execution = PlaybookExecution(
-            playbook_name="create_cluster.yml", status="running", cluster_id=cluster.id
-        )
-        db.session.add(execution)
-        await db.session.commit()
-
-        # Log the request
-        action_details = f"Created cluster {data.name}"
-        if data.force:
-            action_details += " (force=true)"
-        await log_request(g.user_id, "create_cluster", action_details, "success")
-
-        # Return response in documented format
-        return (
-            jsonify(
-                {
-                    "id": cluster.id,
-                    "name": cluster.cluster_name,
-                    "status": cluster.status,
-                    "created_at": cluster.created_at.isoformat(),
-                    "updated_at": cluster.updated_at.isoformat(),
-                }
-            ),
-            201,
-        )
+        except Exception as e:
+            await log_request(
+                g.user_id, "create_cluster", f"Failed to create cluster: {str(e)}", "error"
+            )
+            raise
+        finally:
+            # Release lock after completion or error
+            await lock.release()
 
     except Exception as e:
         await log_request(
@@ -423,60 +386,102 @@ async def update_service_account():
         if not cluster:
             raise ResourceNotFoundError(f"Cluster {data.cluster_name} not found")
 
-        # Get Vault token
-        start_time = time.time()
-        try:
-            vault_response = await vault_client.secrets.kv.v2.read_secret_version(
-                path="kubernetes/cluster-config",
-                mount_point=os.environ.get("VAULT_NAMESPACE", "default"),
-            )
-            await record_vault_operation("read_secret", start_time, True)
-            vault_token = vault_client.token
-        except Exception as e:
-            await record_vault_operation("read_secret", start_time, False)
-            raise ExternalServiceError(str(e), "vault")
+        # Get kubeconfig based on provided source
+        if data.kubeconfig_vault_path:
+            # Read vault token from sidecar file
+            try:
+                with open("/vault/token", "r") as f:
+                    vault_token = f.read().strip()
+            except Exception as e:
+                raise ExternalServiceError(f"Failed to read vault token: {str(e)}", "vault")
+
+            # Configure vault client with token
+            vault_client.client.token = vault_token
+
+            start_time = time.time()
+            try:
+                async with vault_client.client.secrets.kv.v2.read_secret_version(
+                    path=data.kubeconfig_vault_path,
+                    mount_point=os.environ.get("VAULT_NAMESPACE", "default"),
+                ) as response:
+                    await record_vault_operation("read_secret", start_time, True)
+                    vault_data = response.data.data
+                    kubeconfig_base64 = vault_data.get("kubeconfig")
+                    if not kubeconfig_base64:
+                        raise ValidationError(
+                            f"No kubeconfig found at Vault path: {data.kubeconfig_vault_path}"
+                        )
+            except Exception as e:
+                await record_vault_operation("read_secret", start_time, False)
+                raise ExternalServiceError(str(e), "vault")
+        elif data.kubeconfig:
+            kubeconfig_base64 = data.kubeconfig
+        else:
+            raise ValidationError("Either kubeconfig or kubeconfig_vault_path must be provided")
 
         # Update service account
         cluster.service_account = data.service_account
         await db.session.commit()
-
-        # Run playbook
-        playbook_path = os.path.join(
-            current_app.config["PLAYBOOK_DIR"], "update_service_account.yml"
-        )
-
-        process = await run_playbook_async(
-            playbook_path,
-            {
-                "cluster_name": data.cluster_name,
-                "service_account": data.service_account,
-                "overwrite": True,  # Always overwrite when updating service account
-                "vault_token": vault_token,
-            },
-        )
 
         # Create playbook execution record
         execution = PlaybookExecution(
             playbook_name="update_service_account.yml",
             status="running",
             cluster_id=cluster.id,
+            start_time=datetime.now(timezone.utc),
+            extra_vars=json.dumps(
+                {
+                    "cluster_name": data.cluster_name,
+                    "service_account": data.service_account,
+                    "namespace": data.namespace,
+                    "kubeconfig_base64": kubeconfig_base64,  # Pass as base64
+                    "overwrite": True,  # Always overwrite when updating service account
+                },
+                default=str,
+            ),
+            command="",  # Will be updated after playbook starts
+            pid=None,  # Will be updated after playbook starts
+            return_code=None,
         )
         db.session.add(execution)
         await db.session.commit()
 
-        # Log the request
-        await log_request(
-            g.user_id,
-            "update_service_account",
-            f"Updated service account for cluster {data.cluster_name}",
-            "success",
+        # Run playbook and update execution record
+        playbook_path = os.path.join(
+            current_app.config["PLAYBOOK_DIR"], "update_service_account.yml"
         )
+
+        process, cmd_str = await run_playbook_async(
+            playbook_path,
+            {
+                "cluster_name": data.cluster_name,
+                "service_account": data.service_account,
+                "namespace": data.namespace,
+                "kubeconfig_base64": kubeconfig_base64,  # Pass as base64
+                "overwrite": True,  # Always overwrite when updating service account
+                "force": True,  # Always force when updating service account
+            },
+        )
+        execution.command = cmd_str
+        execution.pid = process.pid
+        await db.session.commit()
 
         return (
             jsonify(
                 {
                     "message": f"Service account update started for cluster {data.cluster_name}",
                     "execution_id": execution.id,
+                    "playbook_execution": {
+                        "id": execution.id,
+                        "status": execution.status,
+                        "playbook": execution.playbook_name,
+                        "start_time": execution.start_time.isoformat(),
+                        "extra_vars": json.loads(execution.extra_vars),
+                        "cluster_id": cluster.id,
+                        "command": execution.command,
+                        "pid": execution.pid,
+                        "return_code": execution.return_code,
+                    },
                 }
             ),
             202,
@@ -510,34 +515,34 @@ async def check_cluster_status(cluster_name: str):
         A JSON response with the cluster status.
     """
     try:
-        cluster = await Cluster.query.filter_by(cluster_name=cluster_name).first()
+        if not cluster_name:
+            raise ValidationError("Cluster name is required")
 
+        cluster = await Cluster.query.filter_by(cluster_name=cluster_name).first()
         if not cluster:
             raise ResourceNotFoundError(f"Cluster {cluster_name} not found")
 
+        # Get latest playbook execution
         latest_execution = (
             await PlaybookExecution.query.filter_by(cluster_id=cluster.id)
-            .order_by(PlaybookExecution.started_at.desc())
+            .order_by(PlaybookExecution.start_time.desc())
             .first()
         )
 
         response = ClusterStatusResponse(
+            id=cluster.id,
             name=cluster.cluster_name,
             status=cluster.status,
             created_at=cluster.created_at.isoformat(),
             updated_at=cluster.updated_at.isoformat(),
-            service_account=cluster.service_account,
-            playbook_status=latest_execution.status if latest_execution else None,
+            playbook_execution=latest_execution.to_dict() if latest_execution else None,
         )
 
         return jsonify(response.dict()), 200
 
     except Exception as e:
         await log_request(
-            g.user_id,
-            "check_status",
-            f"Failed to check cluster status: {str(e)}",
-            "error",
+            g.user_id, "check_cluster_status", f"Failed to get cluster status: {str(e)}", "error"
         )
         raise
 
@@ -557,27 +562,32 @@ async def check_status():
     """
     try:
         clusters = await Cluster.query.all()
-        result = []
+        response = []
+
         for cluster in clusters:
+            # Get latest playbook execution for each cluster
             latest_execution = (
                 await PlaybookExecution.query.filter_by(cluster_id=cluster.id)
-                .order_by(PlaybookExecution.started_at.desc())
+                .order_by(PlaybookExecution.start_time.desc())
                 .first()
             )
 
-            result.append(
-                {
-                    "cluster_name": cluster.cluster_name,
-                    "status": cluster.status,
-                    "service_account": cluster.service_account,
-                    "playbook_status": latest_execution.status if latest_execution else None,
-                }
+            status = ClusterStatusResponse(
+                id=cluster.id,
+                name=cluster.cluster_name,
+                status=cluster.status,
+                created_at=cluster.created_at.isoformat(),
+                updated_at=cluster.updated_at.isoformat(),
+                playbook_execution=latest_execution.to_dict() if latest_execution else None,
             )
+            response.append(status.dict())
 
-        return jsonify(result), 200
+        return jsonify(response), 200
 
     except Exception as e:
-        await log_request(g.user_id, "check_status", f"Failed to check status: {str(e)}", "error")
+        await log_request(
+            g.user_id, "check_status", f"Failed to get clusters status: {str(e)}", "error"
+        )
         raise
 
 
@@ -622,7 +632,7 @@ async def health_check():
         start_time = time.time()
         async with aiohttp.ClientSession() as session:
             async with session.get(
-                f"{vault_client.url}/v1/sys/health", timeout=aiohttp.ClientTimeout(total=5)
+                f"{vault_client.client.url}/v1/sys/health", timeout=aiohttp.ClientTimeout(total=5)
             ) as response:
                 if response.status == 200:
                     health_status["services"]["vault"] = {
@@ -652,7 +662,7 @@ async def health_check():
         start_time = time.time()
         async with aiohttp.ClientSession() as session:
             async with session.get(
-                f"{config.KEYCLOAK_URL}/health", timeout=aiohttp.ClientTimeout(total=5)
+                f"{Config.from_env().KEYCLOAK_URL}/health", timeout=aiohttp.ClientTimeout(total=5)
             ) as response:
                 if response.status == 200:
                     health_status["services"]["keycloak"] = {

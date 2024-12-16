@@ -8,6 +8,7 @@ and playbook execution tracking.
 from datetime import datetime, timezone
 
 from . import db
+from .schemas import PlaybookExecutionResponse
 
 
 def get_utc_now():
@@ -112,3 +113,19 @@ class PlaybookExecution(db.Model):
     completed_at = db.Column(db.DateTime(timezone=True))
     result = db.Column(db.Text)
     cluster_id = db.Column(db.Integer, db.ForeignKey("cluster.id"), nullable=False)
+
+    def to_dict(self) -> dict:
+        """Convert playbook execution to dictionary format.
+
+        Returns:
+            dict: Dictionary representation of the playbook execution.
+        """
+        return PlaybookExecutionResponse(
+            id=self.id,
+            playbook_name=self.playbook_name,
+            status=self.status,
+            started_at=self.started_at.isoformat() if self.started_at else None,
+            completed_at=self.completed_at.isoformat() if self.completed_at else None,
+            result=self.result,
+            cluster_id=self.cluster_id,
+        ).dict()
