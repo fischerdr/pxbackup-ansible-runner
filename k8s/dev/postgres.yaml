@@ -43,6 +43,13 @@ spec:
         envFrom:
         - configMapRef:
             name: postgres-config
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
         volumeMounts:
         - name: postgres-data
           mountPath: /var/lib/postgresql/data

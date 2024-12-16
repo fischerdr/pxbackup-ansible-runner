@@ -7,6 +7,9 @@ nodes:
   - containerPort: 30000
     hostPort: 30000
     protocol: TCP  # For our application
+  - containerPort: 30500
+    hostPort: 30500
+    protocol: TCP  # For Flask application
   - containerPort: 30432
     hostPort: 30432
     protocol: TCP  # For PostgreSQL
@@ -16,3 +19,15 @@ nodes:
   - containerPort: 30200
     hostPort: 30200
     protocol: TCP  # For Vault
+  - containerPort: 30379
+    hostPort: 30379
+    protocol: TCP  # For Redis
+  - containerPort: 30300
+    hostPort: 30300
+    protocol: TCP  # For Gitea
+  - containerPort: 30800
+    hostPort: 30800
+    protocol: TCP  # For Mock Inventory
+  - containerPort: 30900
+    hostPort: 30900
+    protocol: TCP  # For Prometheus

@@ -4,6 +4,7 @@ kind: Kustomization
 resources:
   - database.yaml
   - flask-app.yaml
+  - flask-app-hpa.yaml
   - redis.yaml
   - vault.yaml
   - keycloak.yaml
