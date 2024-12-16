@@ -1,7 +1,7 @@
 FROM fedora:39
 
 LABEL maintainer="Codeium Engineering Team"
-LABEL description="Production image for pxbkup-clstradmin - PX-Backup Cluster Administration Service"
+LABEL description="Development image for pxbkup-clstradmin - PX-Backup Cluster Administration Service"
 
 # Install system dependencies
 RUN dnf update -y && \
@@ -15,6 +15,10 @@ RUN dnf update -y && \
     postgresql-devel \
     openssl-devel \
     libffi-devel \
+    curl \
+    vim \
+    procps \
+    htop \
     && dnf clean all \
     && rm -rf /var/cache/dnf/*
 
@@ -28,33 +32,47 @@ RUN mkdir -p /app /app/instance /app/playbooks /runner \
 WORKDIR /app
 
 # Copy requirements first for better caching
-COPY requirements.txt .
-RUN pip3 install --no-cache-dir -r requirements.txt
+COPY requirements*.txt ./
+RUN pip3 install --no-cache-dir -r requirements.txt -r requirements-dev.txt
+
+# Install development tools
+RUN pip3 install --no-cache-dir \
+    debugpy \
+    ipython \
+    ipdb
 
 # Copy application code
-COPY app/ app/
-COPY migrations/ migrations/
-COPY alembic.ini .
-
-# Set proper permissions
+COPY . .
 RUN chown -R pxbackup:pxbackup /app
 
 # Switch to non-root user
 USER pxbackup
 
-# Set Python path and environment
+# Set environment variables
 ENV PYTHONPATH=/app
 ENV FLASK_APP=app
-ENV FLASK_ENV=production
+ENV FLASK_ENV=development
+ENV FLASK_DEBUG=1
 ENV PROMETHEUS_MULTIPROC_DIR=/tmp
 ENV APP_NAME=pxbkup-clstradmin
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
 
-# Expose port
+# Enable hot reloading for development
+ENV FLASK_RUN_EXTRA_FILES=/app/app:/app/migrations
+
+# Expose ports
 EXPOSE 5000
+# Debug port
+EXPOSE 5678
 
-# Health check
+# Health check for development
 HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:5000/health || exit 1
 
-# Use gunicorn for production
-CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "4", "--threads", "2", "--worker-class", "gthread", "--worker-tmp-dir", "/dev/shm", "--access-logfile", "-", "--error-logfile", "-", "app:create_app()"]
+# Use an entrypoint script for development
+COPY scripts/docker-entrypoint-dev.sh /docker-entrypoint.sh
+RUN chmod +x /docker-entrypoint.sh
+
+ENTRYPOINT ["/docker-entrypoint.sh"]
+CMD ["flask", "run", "--host=0.0.0.0", "--reload"]

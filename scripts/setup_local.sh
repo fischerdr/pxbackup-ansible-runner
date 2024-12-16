@@ -102,9 +102,10 @@ if ! kubectl exec -it $VAULT_POD -- vault status &> /dev/null; then
     # Enable required secrets engines
     kubectl exec -it $VAULT_POD -- vault secrets enable -path=pxbackup kv-v2
 
-    # Store development secrets
+    # Store development secrets using Kind cluster kubeconfig
+    KIND_KUBECONFIG=$(kind get kubeconfig --name pxbackup-local | base64 -w 0)
     kubectl exec -it $VAULT_POD -- vault kv put pxbackup/dev/kubeconfig \
-        value="$(cat ~/.kube/config | base64)"
+        value="$KIND_KUBECONFIG"
 fi
 
 # Initialize Keycloak
