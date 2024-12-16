@@ -1,0 +1,12 @@
+kind/ directory for Kind cluster configurations
+k8s/ directory that holds Kubernetes manifests with subdirectories: dev/ for local development environment and prod/ for production environment
+scripts/ directory for all scripts
+docs/ directory for documentation
+tests/ directory for unit and integration tests
+app/ directory for application code which is a Flask application
+.venv/ directory for virtual environment
+always try to keep Python project configuration (pyproject.toml) in sync with Requirements files (requirements.txt and requirements-dev.txt) and upto date
+this application is a Flask application that takes a k8s cluster and adds it to the pxbackup configuration using ansible-playbooks it also allows for the used service account to be refreshed and updated
+this application stores the requests in a database and the playbook execution results in a database
+make sure to update the setup_local.sh scripts when updating the k8s/dev deployment files as this is used for local development
+the flask applicationshould be named "pxbkup-clstradmin"
