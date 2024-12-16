@@ -66,7 +66,9 @@ class CreateClusterRequest(BaseModel):
         """Validate namespace follows Kubernetes and security conventions."""
         # Kubernetes naming convention check
         if not v.replace("-", "").isalnum():
-            raise ValueError("Namespace must contain only alphanumeric characters and hyphens")
+            raise ValueError(
+                "Namespace must contain only alphanumeric characters and hyphens"
+            )
         if not v[0].isalpha() or not v[-1].isalnum():
             raise ValueError(
                 "Namespace must start with a letter and end with an alphanumeric character"
@@ -103,7 +105,9 @@ class CreateClusterRequest(BaseModel):
     def validate_kubeconfig_source(self) -> "CreateClusterRequest":
         """Ensure either kubeconfig or kubeconfig_vault_path is provided."""
         if bool(self.kubeconfig) == bool(self.kubeconfig_vault_path):
-            raise ValueError("Exactly one of kubeconfig or kubeconfig_vault_path must be provided")
+            raise ValueError(
+                "Exactly one of kubeconfig or kubeconfig_vault_path must be provided"
+            )
         return self
 
 

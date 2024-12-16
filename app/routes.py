@@ -37,7 +37,9 @@ from .utils.monitoring import record_vault_operation, track_request_metrics
 bp = Blueprint("api", __name__)
 
 # Initialize rate limiter
-limiter = Limiter(key_func=get_remote_address, default_limits=["200 per day", "50 per hour"])
+limiter = Limiter(
+    key_func=get_remote_address, default_limits=["200 per day", "50 per hour"]
+)
 
 
 @bp.errorhandler(ValidationError)
@@ -78,7 +80,11 @@ def handle_external_service_error(error):
     """Handle external service errors."""
     return (
         jsonify(
-            {"error": str(error), "service": error.service, "error_code": "EXTERNAL_SERVICE_ERROR"}
+            {
+                "error": str(error),
+                "service": error.service,
+                "error_code": "EXTERNAL_SERVICE_ERROR",
+            }
         ),
         503,
     )
@@ -196,10 +202,14 @@ async def create_new_cluster():
                         f"Cluster {data.name} already exists. Use force=true to recreate"
                     )
                 # If force=true, delete existing cluster and its resources
-                current_app.logger.warning(f"Force recreating existing cluster {data.name}")
+                current_app.logger.warning(
+                    f"Force recreating existing cluster {data.name}"
+                )
                 async with db.session.begin_nested():
                     # Delete associated resources in a single transaction
-                    await PlaybookExecution.query.filter_by(cluster_id=existing.id).delete()
+                    await PlaybookExecution.query.filter_by(
+                        cluster_id=existing.id
+                    ).delete()
                     await db.session.delete(existing)
                 await db.session.commit()
 
@@ -224,7 +234,9 @@ async def create_new_cluster():
             except aiohttp.ClientError as e:
                 raise ExternalServiceError(str(e), "inventory")
             except asyncio.TimeoutError:
-                raise ExternalServiceError("Inventory API request timed out", "inventory")
+                raise ExternalServiceError(
+                    "Inventory API request timed out", "inventory"
+                )
 
             # Get kubeconfig based on provided source
             if data.kubeconfig_vault_path:
@@ -233,7 +245,9 @@ async def create_new_cluster():
                     with open("/vault/token", "r") as f:
                         vault_token = f.read().strip()
                 except Exception as e:
-                    raise ExternalServiceError(f"Failed to read vault token: {str(e)}", "vault")
+                    raise ExternalServiceError(
+                        f"Failed to read vault token: {str(e)}", "vault"
+                    )
 
                 # Configure vault client with token
                 vault_client.client.token = vault_token
@@ -257,7 +271,9 @@ async def create_new_cluster():
             elif data.kubeconfig:
                 kubeconfig_base64 = data.kubeconfig
             else:
-                raise ValidationError("Either kubeconfig or kubeconfig_vault_path must be provided")
+                raise ValidationError(
+                    "Either kubeconfig or kubeconfig_vault_path must be provided"
+                )
 
             # Create cluster record
             cluster = Cluster(
@@ -283,7 +299,9 @@ async def create_new_cluster():
                         "kubeconfig_base64": kubeconfig_base64,  # Pass as base64
                         "force": data.force,
                         "overwrite": data.force,  # Set overwrite to match force flag
-                        "inventory_id": inventory_data.get("id"),  # Pass inventory data to playbook
+                        "inventory_id": inventory_data.get(
+                            "id"
+                        ),  # Pass inventory data to playbook
                         "inventory_metadata": inventory_data.get(
                             "metadata", {}
                         ),  # Pass any additional metadata
@@ -305,7 +323,9 @@ async def create_new_cluster():
                 "kubeconfig_base64": kubeconfig_base64,
                 "force": data.force,
                 "overwrite": data.force,  # Set overwrite to match force flag
-                "inventory_id": inventory_data.get("id"),  # Pass inventory data to playbook
+                "inventory_id": inventory_data.get(
+                    "id"
+                ),  # Pass inventory data to playbook
                 "inventory_metadata": inventory_data.get(
                     "metadata", {}
                 ),  # Pass any additional metadata
@@ -316,7 +336,9 @@ async def create_new_cluster():
             await db.session.commit()
 
             # Run playbook
-            playbook_path = os.path.join(current_app.config["PLAYBOOK_DIR"], "create_cluster.yml")
+            playbook_path = os.path.join(
+                current_app.config["PLAYBOOK_DIR"], "create_cluster.yml"
+            )
 
             process, cmd_str = await run_playbook_async(playbook_path, extra_vars)
             execution.command = cmd_str
@@ -349,7 +371,10 @@ async def create_new_cluster():
 
         except Exception as e:
             await log_request(
-                g.user_id, "create_cluster", f"Failed to create cluster: {str(e)}", "error"
+                g.user_id,
+                "create_cluster",
+                f"Failed to create cluster: {str(e)}",
+                "error",
             )
             raise
         finally:
@@ -393,7 +418,9 @@ async def update_service_account():
                 with open("/vault/token", "r") as f:
                     vault_token = f.read().strip()
             except Exception as e:
-                raise ExternalServiceError(f"Failed to read vault token: {str(e)}", "vault")
+                raise ExternalServiceError(
+                    f"Failed to read vault token: {str(e)}", "vault"
+                )
 
             # Configure vault client with token
             vault_client.client.token = vault_token
@@ -417,7 +444,9 @@ async def update_service_account():
         elif data.kubeconfig:
             kubeconfig_base64 = data.kubeconfig
         else:
-            raise ValidationError("Either kubeconfig or kubeconfig_vault_path must be provided")
+            raise ValidationError(
+                "Either kubeconfig or kubeconfig_vault_path must be provided"
+            )
 
         # Update service account
         cluster.service_account = data.service_account
@@ -542,7 +571,10 @@ async def check_cluster_status(cluster_name: str):
 
     except Exception as e:
         await log_request(
-            g.user_id, "check_cluster_status", f"Failed to get cluster status: {str(e)}", "error"
+            g.user_id,
+            "check_cluster_status",
+            f"Failed to get cluster status: {str(e)}",
+            "error",
         )
         raise
 
@@ -578,7 +610,9 @@ async def check_status():
                 status=cluster.status,
                 created_at=cluster.created_at.isoformat(),
                 updated_at=cluster.updated_at.isoformat(),
-                playbook_execution=latest_execution.to_dict() if latest_execution else None,
+                playbook_execution=latest_execution.to_dict()
+                if latest_execution
+                else None,
             )
             response.append(status.dict())
 
@@ -586,7 +620,10 @@ async def check_status():
 
     except Exception as e:
         await log_request(
-            g.user_id, "check_status", f"Failed to get clusters status: {str(e)}", "error"
+            g.user_id,
+            "check_status",
+            f"Failed to get clusters status: {str(e)}",
+            "error",
         )
         raise
 
@@ -632,7 +669,8 @@ async def health_check():
         start_time = time.time()
         async with aiohttp.ClientSession() as session:
             async with session.get(
-                f"{vault_client.client.url}/v1/sys/health", timeout=aiohttp.ClientTimeout(total=5)
+                f"{vault_client.client.url}/v1/sys/health",
+                timeout=aiohttp.ClientTimeout(total=5),
             ) as response:
                 if response.status == 200:
                     health_status["services"]["vault"] = {
@@ -662,7 +700,8 @@ async def health_check():
         start_time = time.time()
         async with aiohttp.ClientSession() as session:
             async with session.get(
-                f"{Config.from_env().KEYCLOAK_URL}/health", timeout=aiohttp.ClientTimeout(total=5)
+                f"{Config.from_env().KEYCLOAK_URL}/health",
+                timeout=aiohttp.ClientTimeout(total=5),
             ) as response:
                 if response.status == 200:
                     health_status["services"]["keycloak"] = {
